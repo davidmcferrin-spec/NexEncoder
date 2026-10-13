@@ -18,7 +18,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .channels import load_config, save_config, snapshot_for
-from .cgfeed import detect_html_backend
+from .cgfeed import detect_html_backend, ndi_available
 from .decklink import list_devices
 from .effects import (
     bars_path,
@@ -312,8 +312,13 @@ def make_handler(console: Console):
                 raise ValueError("recall body must be an object")
             config = load_config(console.config_path)
             result = recall_effect(console.state_dir, channel_id, raw, config)
+            warnings = []
             if result.get("html") and console.html_backend() == "none":
-                result["warning"] = "HTML renderer is not installed; those layers stay transparent"
+                warnings.append("HTML renderer is not installed; those layers stay transparent")
+            if result.get("ndi") and not ndi_available():
+                warnings.append("NDI receiver is not installed; those layers stay transparent")
+            if warnings:
+                result["warning"] = " ".join(warnings)
             self._json(200, {"ok": True, **result})
 
         def _normalize(self, channel_id: str, body: bytes) -> None:

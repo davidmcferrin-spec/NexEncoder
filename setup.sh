@@ -218,6 +218,9 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
   else
     log "WARNING: gstreamer1.0-wpe is not in apt. HTML layers use Chromium when it is on PATH."
   fi
+  if ! gst-inspect-1.0 ndisrc >/dev/null 2>&1; then
+    log "WARNING: GStreamer ndisrc is not installed. NDI CG needs the NDI SDK and that plugin. The layer stays transparent until the receiver is present."
+  fi
 
   if command -v tsp >/dev/null 2>&1; then
     log "tsduck is installed ($(tsp --version 2>/dev/null | head -n 1 || true))"

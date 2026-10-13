@@ -139,6 +139,11 @@ def test_preset_limits_layers_and_raster():
     effect = normalize_effect(good)
     assert effect["layers"][0]["source"]["url"].startswith("http://127.0.0.1:8788/cg/bug.html")
     assert effect["layers"][1]["source"] == {"type": "sdi-key"}
+    ndi = normalize_effect({
+        "format": "1080i59.94",
+        "layers": [{"level": 3, "source": {"type": "ndi", "name": "  GRAPHICS (NDI)  "}}],
+    })
+    assert ndi["layers"][0]["source"] == {"type": "ndi", "name": "GRAPHICS (NDI)"}
     with pytest.raises(ValueError):
         normalize_effect({**good, "layers": good["layers"] * 3})
     with pytest.raises(ValueError, match="one SDI"):

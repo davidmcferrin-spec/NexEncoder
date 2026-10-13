@@ -1,7 +1,8 @@
 """CG feeders for the four layer slots.
 
-HTML is painted by WPE (GStreamer) when that plugin is installed, and by
-Chromium's screencast otherwise. Fill/key is one shared DeckLink pair.
+HTML is a live page: WPE when that plugin is installed, otherwise Chromium
+capturing PNG with the background omitted so CSS alpha survives. NDI is a
+GStreamer ndisrc into the same BGRA slot. Fill/key is one shared DeckLink pair.
 A missing renderer leaves the slot file unwritten, which the filter treats
 as a transparent layer. The primary picture, captions, and SCTE path stay up.
 """
@@ -19,6 +20,7 @@ import subprocess
 import threading
 import time
 import urllib.request
+import zlib
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -28,10 +30,14 @@ log = logging.getLogger("nexencoder.cg")
 
 HEADER = 32
 MAGIC = b"NXCG"
+FLAG_PREMULTIPLIED = 1
+_PNG_SIG = b"\x89PNG\r\n\x1a\n"
+_NDI_READY: bool | None = None
+_NDI_MISSING_LOGGED = False
 
 
-def pack_header(seq: int, width: int, height: int, nbytes: int) -> bytes:
-    return struct.pack("<4sIIIIIII", MAGIC, seq, width, height, nbytes, 0, 0, 0)
+def pack_header(seq: int, width: int, height: int, nbytes: int, flags: int = 0) -> bytes:
+    return struct.pack("<4sIIIIIII", MAGIC, seq, width, height, nbytes, flags, 0, 0)
 
 
 def read_slot(path: Path, width: int, height: int, spins: int = 4) -> bytes | None:
@@ -65,13 +71,14 @@ def read_slot(path: Path, width: int, height: int, spins: int = 4) -> bytes | No
 class SlotWriter:
     """Seqlock frame file. Readers ignore odd sequence numbers."""
 
-    def __init__(self, path: Path, width: int, height: int) -> None:
+    def __init__(self, path: Path, width: int, height: int, premultiplied: bool = False) -> None:
         if width < 2 or height < 2:
             raise ValueError("slot raster is too small")
         self.path = Path(path)
         self.width = width
         self.height = height
         self.nbytes = width * height * 4
+        self.flags = FLAG_PREMULTIPLIED if premultiplied else 0
         self.seq = 0
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_bytes(b"\x00" * (HEADER + self.nbytes))
@@ -79,7 +86,7 @@ class SlotWriter:
     def _seq(self, seq: int) -> None:
         with self.path.open("r+b") as handle:
             handle.seek(0)
-            handle.write(pack_header(seq, self.width, self.height, self.nbytes))
+            handle.write(pack_header(seq, self.width, self.height, self.nbytes, self.flags))
             handle.flush()
 
     def write(self, pixels: bytes) -> None:
@@ -94,6 +101,94 @@ class SlotWriter:
         even = odd + 1
         self._seq(even)
         self.seq = even
+
+
+def _paeth(left: int, up: int, up_left: int) -> int:
+    estimate = left + up - up_left
+    if abs(estimate - left) <= abs(estimate - up) and abs(estimate - left) <= abs(estimate - up_left):
+        return left
+    if abs(estimate - up) <= abs(estimate - up_left):
+        return up
+    return up_left
+
+
+def decode_png_bgra(png: bytes) -> bytes:
+    """Turn an 8-bit RGB or RGBA PNG into straight BGRA. The alpha channel is kept."""
+    if not png.startswith(_PNG_SIG):
+        raise ValueError("CG frame is not a PNG")
+    offset = len(_PNG_SIG)
+    width = height = 0
+    color = 0
+    compressed = bytearray()
+    while offset + 8 <= len(png):
+        length = struct.unpack_from(">I", png, offset)[0]
+        kind = png[offset + 4:offset + 8]
+        start = offset + 8
+        end = start + length
+        if end + 4 > len(png):
+            raise ValueError("truncated PNG")
+        chunk = png[start:end]
+        if kind == b"IHDR":
+            width, height, depth, color, compress, png_filter, interlace = struct.unpack(">IIBBBBB", chunk)
+            if depth != 8 or color not in (2, 6) or compress != 0 or png_filter != 0 or interlace != 0:
+                raise ValueError("CG PNG must be 8-bit RGB or RGBA without interlacing")
+        elif kind == b"IDAT":
+            compressed += chunk
+        elif kind == b"IEND":
+            break
+        offset = end + 4
+    if width < 1 or height < 1 or not compressed:
+        raise ValueError("CG PNG has no image")
+    channels = 4 if color == 6 else 3
+    raw = zlib.decompress(bytes(compressed))
+    stride = width * channels
+    expected = height * (stride + 1)
+    if len(raw) < expected:
+        raise ValueError("CG PNG rows are short")
+    rows = []
+    cursor = 0
+    for y in range(height):
+        mode = raw[cursor]
+        cursor += 1
+        row = bytearray(raw[cursor:cursor + stride])
+        cursor += stride
+        prior = rows[-1] if rows else bytearray(stride)
+        if mode == 1:
+            for i in range(stride):
+                row[i] = (row[i] + (row[i - channels] if i >= channels else 0)) & 255
+        elif mode == 2:
+            for i in range(stride):
+                row[i] = (row[i] + prior[i]) & 255
+        elif mode == 3:
+            for i in range(stride):
+                left = row[i - channels] if i >= channels else 0
+                row[i] = (row[i] + ((left + prior[i]) // 2)) & 255
+        elif mode == 4:
+            for i in range(stride):
+                left = row[i - channels] if i >= channels else 0
+                up_left = prior[i - channels] if i >= channels else 0
+                row[i] = (row[i] + _paeth(left, prior[i], up_left)) & 255
+        elif mode != 0:
+            raise ValueError("CG PNG filter is unknown")
+        rows.append(row)
+    out = bytearray(width * height * 4)
+    at = 0
+    for row in rows:
+        if channels == 4:
+            for x in range(0, stride, 4):
+                out[at] = row[x + 2]
+                out[at + 1] = row[x + 1]
+                out[at + 2] = row[x]
+                out[at + 3] = row[x + 3]
+                at += 4
+        else:
+            for x in range(0, stride, 3):
+                out[at] = row[x + 2]
+                out[at + 1] = row[x + 1]
+                out[at + 2] = row[x]
+                out[at + 3] = 255
+                at += 4
+    return bytes(out)
 
 
 def wpe_argv(url: str, width: int, height: int) -> list[str]:
@@ -123,16 +218,60 @@ def chromium_argv(browser: str, port: int, url: str, width: int, height: int) ->
     return [
         browser, "--headless=new", "--disable-gpu", "--hide-scrollbars",
         "--no-first-run", "--force-device-scale-factor=1",
+        "--default-background-color=00000000",
         f"--remote-debugging-port={port}",
         f"--window-size={width},{height}",
         url,
     ]
 
 
+def ndi_argv(name: str, width: int, height: int) -> list[str]:
+    """Receive one NDI source. BGRA from NDI is premultiplied; the slot flag says so."""
+    if '"' in name or "\\" in name:
+        raise ValueError("NDI source name cannot contain quotes")
+    return [
+        "gst-launch-1.0", "-q",
+        "ndisrc", f'ndi-name="{name}"',
+        "!", "videoconvert",
+        "!", "videoscale",
+        "!", "videorate",
+        "!", f"video/x-raw,format=BGRA,width={width},height={height},framerate=30/1",
+        "!", "fdsink", "fd=1", "sync=false",
+    ]
+
+
+def ndi_available(inspect=None) -> bool:
+    """True when GStreamer's ndisrc element is installed. The NDI SDK is not downloaded."""
+    if inspect is not None:
+        return bool(inspect())
+    global _NDI_READY
+    if _NDI_READY is None:
+        _NDI_READY = _ndi_probe()
+    return _NDI_READY
+
+
+def _ndi_probe() -> bool:
+    if shutil.which("gst-inspect-1.0") is None:
+        return False
+    try:
+        done = subprocess.run(
+            ["gst-inspect-1.0", "ndisrc"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return done.returncode == 0
+
+
 def feeder_key(layer: dict) -> str:
     source = layer["source"]
     if source["type"] == "html":
         return f"html:{layer['slot']}:{source['url']}"
+    if source["type"] == "ndi":
+        return f"ndi:{layer['slot']}:{source['name']}"
     return "sdi"
 
 
@@ -329,7 +468,7 @@ def _ws_recv(sock: socket.socket) -> str:
         length = struct.unpack("!H", read(2))[0]
     elif length == 127:
         length = struct.unpack("!Q", read(8))[0]
-    if length > 8_000_000:
+    if length > 20_000_000:
         raise OSError("devtools frame is too large")
     data = read(length)
     opcode = first[0] & 0x0F
@@ -338,25 +477,6 @@ def _ws_recv(sock: socket.socket) -> str:
     if opcode != 0x1:
         return ""
     return data.decode("utf-8", "replace")
-
-
-def _jpeg_to_bgra(jpeg: bytes, width: int, height: int) -> bytes:
-    proc = subprocess.run(
-        [
-            "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-f", "image2pipe", "-i", "pipe:0",
-            "-f", "rawvideo", "-pix_fmt", "bgra", "-s", f"{width}x{height}",
-            "pipe:1",
-        ],
-        input=jpeg,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-        timeout=5,
-    )
-    if proc.returncode != 0 or len(proc.stdout) != width * height * 4:
-        raise OSError("could not decode a CG frame")
-    return proc.stdout
 
 
 def run_chromium_feeder(
@@ -398,40 +518,55 @@ def run_chromium_feeder(
             raise OSError("Chromium did not open a devtools page")
         parsed = urlparse(target)
         sock = _ws_handshake(parsed.hostname or "127.0.0.1", parsed.port or port, parsed.path or "/")
-        sock.settimeout(2)
+        sock.settimeout(5)
         call_id = 0
 
-        def call(method: str, params: dict | None = None) -> None:
+        def call(method: str, params: dict | None = None) -> dict:
             nonlocal call_id
             call_id += 1
-            _ws_send(sock, json.dumps({"id": call_id, "method": method, "params": params or {}}))
+            expect = call_id
+            _ws_send(sock, json.dumps({"id": expect, "method": method, "params": params or {}}))
+            while not holder.stop.is_set():
+                try:
+                    message = _ws_recv(sock)
+                except (TimeoutError, socket.timeout):
+                    continue
+                if not message:
+                    continue
+                payload = json.loads(message)
+                if payload.get("id") != expect:
+                    continue
+                if payload.get("error"):
+                    raise OSError(str(payload["error"]))
+                result = payload.get("result")
+                return result if isinstance(result, dict) else {}
+            return {}
 
         call("Page.enable")
-        call("Page.startScreencast", {
-            "format": "jpeg",
-            "quality": 80,
-            "maxWidth": writer.width,
-            "maxHeight": writer.height,
-            "everyNthFrame": 1,
+        call("Emulation.setDefaultBackgroundColorOverride", {
+            "color": {"r": 0, "g": 0, "b": 0, "a": 0},
         })
         while not holder.stop.is_set():
-            try:
-                message = _ws_recv(sock)
-            except (TimeoutError, socket.timeout):
-                continue
-            if not message:
-                continue
-            payload = json.loads(message)
-            params = payload.get("params") or {}
-            if payload.get("method") != "Page.screencastFrame":
-                continue
-            frame = params.get("data")
-            session = params.get("sessionId")
-            if isinstance(session, int):
-                call("Page.screencastFrameAck", {"sessionId": session})
-            if not isinstance(frame, str):
-                continue
-            writer.write(_jpeg_to_bgra(base64.b64decode(frame), writer.width, writer.height))
+            started = time.monotonic()
+            result = call("Page.captureScreenshot", {
+                "format": "png",
+                "omitBackground": True,
+                "fromSurface": True,
+            })
+            frame = result.get("data")
+            if isinstance(frame, str):
+                try:
+                    pixels = decode_png_bgra(base64.b64decode(frame))
+                except (ValueError, zlib.error) as exc:
+                    log.warning("HTML frame dropped: %s", exc)
+                else:
+                    if len(pixels) == writer.nbytes:
+                        writer.write(pixels)
+                    else:
+                        log.warning("HTML frame is %s bytes, slot wants %s", len(pixels), writer.nbytes)
+            remain = (1 / 30) - (time.monotonic() - started)
+            if remain > 0 and holder.stop.wait(remain):
+                break
     finally:
         if sock is not None:
             sock.close()
@@ -456,11 +591,17 @@ def _start_layer(layer: dict, spec: dict, backend: str, spawn) -> _Running:
     width = int(spec["width"])
     height = int(spec["height"])
     source = layer["source"]
-    writer = SlotWriter(Path(layer["path"]), width, height)
+    premultiplied = source["type"] == "ndi" or (source["type"] == "html" and backend == "wpe")
+    writer = SlotWriter(Path(layer["path"]), width, height, premultiplied=premultiplied)
     if source["type"] == "sdi-key":
         argv = key_argv(spec["format_code"])
         thread = threading.Thread(
             target=run_pipe_feeder, args=(argv, writer, holder, spawn), name="nexencoder-keyfill", daemon=True,
+        )
+    elif source["type"] == "ndi":
+        argv = ndi_argv(source["name"], width, height)
+        thread = threading.Thread(
+            target=run_pipe_feeder, args=(argv, writer, holder, spawn), name="nexencoder-ndi", daemon=True,
         )
     elif backend == "wpe":
         argv = wpe_argv(source["url"], width, height)
@@ -502,6 +643,13 @@ def reconcile_once(
                 desired.append(layer)
             elif source.get("type") == "html" and chosen != "none":
                 desired.append(layer)
+            elif source.get("type") == "ndi" and ndi_available():
+                desired.append(layer)
+            elif source.get("type") == "ndi":
+                global _NDI_MISSING_LOGGED
+                if not _NDI_MISSING_LOGGED:
+                    log.error("NDI receiver is not installed; %s stays transparent", source.get("name"))
+                    _NDI_MISSING_LOGGED = True
     owner = update_key_owner(state_dir, channel_id, needs_key)
     if owner != channel_id:
         desired = [layer for layer in desired if (layer.get("source") or {}).get("type") != "sdi-key"]

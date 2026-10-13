@@ -358,6 +358,24 @@ static int layers_active(const LayerSlot slots[NX_SLOTS])
     return 0;
 }
 
+static void unpremultiply(uint8_t *px, int w, int h)
+{
+    size_t i, count = (size_t)w * h;
+    for (i = 0; i < count; i++) {
+        uint8_t *pixel = px + i * 4;
+        unsigned alpha = pixel[3];
+        if (alpha == 255)
+            continue;
+        if (alpha == 0) {
+            pixel[0] = pixel[1] = pixel[2] = 0;
+            continue;
+        }
+        pixel[0] = (uint8_t)FFMIN(255, (pixel[0] * 255u + alpha / 2) / alpha);
+        pixel[1] = (uint8_t)FFMIN(255, (pixel[1] * 255u + alpha / 2) / alpha);
+        pixel[2] = (uint8_t)FFMIN(255, (pixel[2] * 255u + alpha / 2) / alpha);
+    }
+}
+
 static int read_layer(const char *path, int w, int h, uint8_t *dst)
 {
     FILE *file;
@@ -393,6 +411,10 @@ static int read_layer(const char *path, int w, int h, uint8_t *dst)
         seq2 = (uint32_t)header[0] | ((uint32_t)header[1] << 8) |
                ((uint32_t)header[2] << 16) | ((uint32_t)header[3] << 24);
         if (seq1 == seq2) {
+            uint32_t flags = (uint32_t)header[20] | ((uint32_t)header[21] << 8) |
+                             ((uint32_t)header[22] << 16) | ((uint32_t)header[23] << 24);
+            if (flags & 1u)
+                unpremultiply(dst, w, h);
             fclose(file);
             return 1;
         }

@@ -1,9 +1,15 @@
 """CG slot files and feeder planning. Nothing here opens a DeckLink device."""
 
+import struct
+import zlib
+
 from nexencoder.cgfeed import (
     SlotWriter,
+    chromium_argv,
+    decode_png_bgra,
     detect_html_backend,
     key_argv,
+    ndi_argv,
     plan_changes,
     read_slot,
     update_key_owner,
@@ -50,6 +56,43 @@ def test_key_and_html_argv_do_not_open_the_program_input():
     assert key.count("-i") == 2
     assert "alphamerge" in " ".join(key)
     assert "yuv422p10" not in key
+
+
+def _png(width: int, height: int, rgba: bytes) -> bytes:
+    assert len(rgba) == width * height * 4
+    raw = bytearray()
+    for y in range(height):
+        raw.append(0)
+        raw += rgba[y * width * 4:(y + 1) * width * 4]
+    compressed = zlib.compress(bytes(raw))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", compressed) + chunk(b"IEND", b"")
+
+
+def test_png_alpha_becomes_straight_bgra():
+    png = _png(2, 1, bytes([0, 255, 0, 128, 255, 0, 0, 0]))
+    bgra = decode_png_bgra(png)
+    assert bgra == bytes([0, 255, 0, 128, 0, 0, 255, 0])
+
+
+def test_chromium_capture_keeps_a_transparent_background():
+    argv = chromium_argv("chromium", 9222, "http://127.0.0.1:8788/cg/bug.html", 1280, 720)
+    assert "--default-background-color=00000000" in argv
+    assert "jpeg" not in " ".join(argv)
+
+
+def test_ndi_argv_names_the_source_and_requests_bgra():
+    argv = ndi_argv("GRAPHICS (NDI)", 1920, 1080)
+    assert "ndisrc" in argv
+    assert 'ndi-name="GRAPHICS (NDI)"' in argv
+    assert "BGRA" in "".join(argv)
+    ndi = {"slot": 0, "source": {"type": "ndi", "name": "GRAPHICS (NDI)"}}
+    from nexencoder.cgfeed import feeder_key
+    assert feeder_key(ndi) == "ndi:0:GRAPHICS (NDI)"
 
 
 def test_html_backend_prefers_wpe_then_chromium():

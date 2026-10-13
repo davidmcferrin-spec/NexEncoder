@@ -42,7 +42,8 @@
         enabled: i === 0,
         level: defaults[i],
         type: "html",
-        url: i === 0 ? "/cg/bug.html" : ""
+        url: i === 0 ? "/cg/bug.html" : "",
+        name: ""
       });
     }
     return rows;
@@ -80,7 +81,9 @@
       if (!layer.enabled) return;
       var source = layer.type === "sdi-key"
         ? { type: "sdi-key" }
-        : { type: "html", url: layer.url };
+        : layer.type === "ndi"
+          ? { type: "ndi", name: layer.name }
+          : { type: "html", url: layer.url };
       used.push({ level: Number(layer.level), source: source });
     });
     return {
@@ -188,6 +191,10 @@
         node = document.createElement("div");
         node.className = "sdi-plate";
         node.textContent = "SDI fill/key \u00b7 DeckLink Duo 2 (3) / (4)";
+      } else if (layer.type === "ndi" && layer.name) {
+        node = document.createElement("div");
+        node.className = "sdi-plate";
+        node.textContent = "NDI \u00b7 " + layer.name;
       }
       if (!node) return;
       node.style.zIndex = String(layer.level + 4);
@@ -289,12 +296,14 @@
         function (value) { layer.level = Number(value); paintLayers(); }
       )));
       card.appendChild(field("Source", select(
-        [["html", "HTML5 URL"], ["sdi-key", "SDI fill/key"]],
+        [["html", "HTML5 URL"], ["ndi", "NDI"], ["sdi-key", "SDI fill/key"]],
         layer.type,
         function (value) { layer.type = value; buildLayerCards(); paintLayers(); }
       )));
       if (layer.type === "html") {
         card.appendChild(field("URL", text(layer.url, function (value) { layer.url = value; paintLayers(); }, "change")));
+      } else if (layer.type === "ndi") {
+        card.appendChild(field("NDI source", text(layer.name, function (value) { layer.name = value; paintLayers(); }, "change")));
       } else {
         var fixed = document.createElement("p");
         fixed.className = "muted";
@@ -370,6 +379,7 @@
       row.level = layer.level;
       row.type = layer.source.type;
       if (row.type === "html") row.url = layer.source.url;
+      if (row.type === "ndi") row.name = layer.source.name;
     });
     document.getElementById("squeeze").width = size[0];
     document.getElementById("squeeze").height = size[1];

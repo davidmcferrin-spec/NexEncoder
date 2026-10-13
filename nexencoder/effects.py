@@ -313,6 +313,17 @@ def absolute_cg_url(url: str, origin: str = HTML_ORIGIN) -> str:
     raise ValueError("CG URL must be http, https, or a path on this console")
 
 
+def _ndi_name(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("NDI source needs a name")
+    name = " ".join(value.split())
+    if not name or len(name) > 200:
+        raise ValueError("NDI source name must be 1 to 200 characters")
+    if '"' in name or "\\" in name:
+        raise ValueError("NDI source name cannot contain quotes")
+    return name
+
+
 def _source(raw: object) -> dict:
     if not isinstance(raw, dict):
         raise ValueError("layer source must be an object")
@@ -321,7 +332,9 @@ def _source(raw: object) -> dict:
         return {"type": "html", "url": absolute_cg_url(str(raw.get("url") or ""))}
     if kind == "sdi-key":
         return {"type": "sdi-key"}
-    raise ValueError("layer source must be html or sdi-key")
+    if kind == "ndi":
+        return {"type": "ndi", "name": _ndi_name(raw.get("name"))}
+    raise ValueError("layer source must be html, ndi, or sdi-key")
 
 
 def normalize_effect(raw: object, channel_format: str | None = None) -> dict:
@@ -660,6 +673,7 @@ def recall_effect(state_dir: Path, channel_id: str, raw: dict, config: dict) -> 
     written["channel"] = channel_id
     written["preset"] = preset_name
     written["html"] = any(layer["source"]["type"] == "html" for layer in effect["layers"])
+    written["ndi"] = any(layer["source"]["type"] == "ndi" for layer in effect["layers"])
     return written
 
 

@@ -287,8 +287,10 @@ h2 { font-size: 1.05rem; margin: 0 0 0.75rem; font-weight: 600; }
   box-shadow: var(--nx-tile-shadow);
 }
 .panel + .panel { margin-top: 1rem; }
-.stack { display: flex; flex-direction: column; gap: 0.75rem; }
-.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.stack > .panel + .panel,
+.grid-2 > .panel + .panel { margin-top: 0; }
+.stack { display: flex; flex-direction: column; gap: 1rem; }
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 1rem; }
 .grid-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem; }
 .stat {
   background: var(--nx-surface);
@@ -481,7 +483,6 @@ code, .mono { font-family: var(--nx-mono); font-size: 0.85em; }
   .login-shell { grid-template-columns: 1fr; }
   .admin-layout { grid-template-columns: 1fr; }
   .clock-row { grid-template-columns: repeat(2, 1fr); }
-  .grid-2 { grid-template-columns: 1fr; }
   .widget-clipboard { grid-column: auto; }
   .clipboard-app { grid-template-columns: 1fr; }
 }

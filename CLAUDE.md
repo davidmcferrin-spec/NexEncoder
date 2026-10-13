@@ -27,8 +27,9 @@ to SCTE-35) and shown on a low-latency WebRTC proxy preview via MediaMTX.
   listener port 9001; input B is DeckLink Duo 2 (2) or port 9002. Output B listens on 9101.
   Layer −5 is the waiting picture. Layer +5 is bars plus an ident. A tone replaces audio
   while bars are the picture. Preset corners are fractions of the frame.
-  Up to four CG layers each take a level from −4 to +4; 0 is the video. HTML is painted by
-  WPE or Chromium. One SDI fill/key pair, DeckLink inputs 3 and 4, is shared. 608/708 stay A/53 side data on the
+  Up to four CG layers each take a level from −4 to +4; 0 is the video. HTML is painted live by
+  WPE or Chromium with alpha kept. An NDI source can occupy a layer when ndisrc is installed.
+  One SDI fill/key pair, DeckLink inputs 3 and 4, is shared. 608/708 stay A/53 side data on the
   primary frame. SCTE-104 still leaves the demuxer as UDP and returns as SCTE-35. SRT inputs have no VANC.
 - Packages: APT only (Ubuntu 24.04 LTS), plus a pinned FFmpeg 9.0.2 built with DeckLink
   and the pinned MediaMTX binary. No pip, no venv. TSDuck and Desktop Video are checked

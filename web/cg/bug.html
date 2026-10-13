@@ -5,6 +5,14 @@
   <title>Bug</title>
   <style>
     html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
+    .fade {
+      position: absolute;
+      top: 10%;
+      right: 6%;
+      width: 28%;
+      height: 12%;
+      background: linear-gradient(90deg, rgba(62, 207, 142, 0.95), rgba(62, 207, 142, 0));
+    }
     .bug {
       position: absolute;
       left: 6%;
@@ -14,10 +22,15 @@
       background: rgba(0, 0, 0, 0.72);
       color: #fff;
       font: 600 42px/1.2 sans-serif;
+      animation: pulse 2.4s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      50% { opacity: 0.45; }
     }
   </style>
 </head>
 <body>
+  <div class="fade"></div>
   <div class="bug">NexEncoder</div>
 </body>
 </html>

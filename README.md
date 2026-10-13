@@ -59,8 +59,9 @@ lands on the same part of the picture.
 `POST /api/channels/A/effects/recall` applies a preset on the running filter graph.
 `POST /api/channels/A/effects/normalize` returns that input to full raster and clears the
 CG. Neither call restarts the channel. CEA-608/708 stay on the primary frame as A/53 SEI,
-and SCTE-104 still arrives as VANC datagrams and leaves as SCTE-35. A CG layer is an HTML
-URL (WPE, or Chromium if WPE is not installed) or the shared SDI fill/key pair on
+and SCTE-104 still arrives as VANC datagrams and leaves as SCTE-35. A CG layer is a live HTML page (WPE, or Chromium capturing PNG with the
+background omitted so transparency survives), an NDI source with alpha when
+GStreamer `ndisrc` is installed, or the shared SDI fill/key pair on
 DeckLink Duo 2 (3) and (4). Each layer takes a level from −4 to +4; 0 is the video.
 A channel holds at most four layers, and two layers cannot share a level.
 
