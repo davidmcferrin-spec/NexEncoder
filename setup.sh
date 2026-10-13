@@ -4,8 +4,11 @@
 # Packages come from APT only: no pip, no venv, no Node, no containers.
 # Installs Python, GStreamer, the local Prometheus stack, a pinned MediaMTX
 # binary, and the console plus channel units. FFmpeg 9.0.2 is downloaded and
-# built with DeckLink, libx264, and libopus. TSDuck and Desktop Video are
-# checked for, not downloaded (Desktop Video needs a Blackmagic login).
+# built with DeckLink (--enable-nonfree), OpenSSL (--enable-version3), libx264,
+# and libopus. The DeckLink demuxer is patched to forward VANC captions and
+# SCTE-104 to the channel supervisor. The nexeffect filter is added for the
+# four-corner squeeze and CG stack. TSDuck and Desktop Video are checked
+# for, not downloaded (Desktop Video needs a Blackmagic login).
 # Rebuild FFmpeg with NEXENCODER_FORCE_FFMPEG_BUILD=1.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -17,8 +20,10 @@ if [ -r /etc/os-release ]; then
   # shellcheck disable=SC1091
   . /etc/os-release
 fi
+HOST_INSTALL=1
 if [ "${ID:-}" != "ubuntu" ] || [ "${VERSION_ID:-}" != "24.04" ]; then
-  log "WARNING: targets Ubuntu 24.04 LTS (found ${PRETTY_NAME:-unknown OS}); continuing"
+  HOST_INSTALL=0
+  log "host install runs only on Ubuntu 24.04 LTS (found ${PRETTY_NAME:-unknown OS})"
 fi
 
 SUDO=""
@@ -42,10 +47,37 @@ fi
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \
   || die "Python 3.10 or newer is required (found $(python3 -V 2>&1))"
 
+if [ "$HOST_INSTALL" -eq 0 ]; then
+  log "running test suite"
+  python3 -m pytest -q
+  log "setup complete (test suite only; host install was skipped)"
+  exit 0
+fi
+
 pin_listen() {
-  local file="$1" addr="$2"
+  local file="$1" addr="$2" unit="$3"
+  local unit_file="" candidate
   [ -f "$file" ] || return 0
   if grep -q 'nexencoder-listen' "$file"; then
+    return 0
+  fi
+  for candidate in "/lib/systemd/system/${unit}" "/usr/lib/systemd/system/${unit}"; do
+    if [ -f "$candidate" ]; then
+      unit_file="$candidate"
+      break
+    fi
+  done
+  if [ -n "$unit_file" ] && grep -q -- "--web.listen-address=" "$unit_file"; then
+    log "${unit} already sets --web.listen-address; leaving ${file} unchanged"
+    return 0
+  fi
+  if grep -q '^ARGS=' "$file" && ! grep -q '^ARGS=""$' "$file" && ! grep -q "^ARGS=''$" "$file"; then
+    log "WARNING: ${file} already sets ARGS; not pinning ${addr}"
+    return 0
+  fi
+  if grep -q '^ARGS=""$' "$file"; then
+    $SUDO sed -i "s/^ARGS=\"\"/ARGS=\"--web.listen-address=${addr}\"/" "$file"
+    printf '\n# nexencoder-listen\n' | $SUDO tee -a "$file" >/dev/null
     return 0
   fi
   printf '\n# nexencoder-listen\nARGS="--web.listen-address=%s"\n' "$addr" | $SUDO tee -a "$file" >/dev/null
@@ -71,8 +103,12 @@ install_ffmpeg() {
     local ver conf
     ver="$("$bin" -version 2>/dev/null | head -n 1 || true)"
     conf="$("$bin" -buildconf 2>/dev/null || true)"
-    if [[ "$ver" == *"$version"* && "$conf" == *"--enable-decklink"* && "$conf" == *"--enable-libx264"* && "$conf" == *"--enable-libopus"* ]]; then
-      log "FFmpeg ${version} with DeckLink is already installed (${bin})"
+    if [[ "$ver" == *"$version"* && "$conf" == *"--enable-decklink"* && "$conf" == *"--enable-nonfree"* \
+      && "$conf" == *"--enable-version3"* && "$conf" == *"--enable-libx264"* && "$conf" == *"--enable-libopus"* ]] \
+      && [ -e /usr/local/lib/libavdevice.so ] \
+      && grep -a -q 'nexencoder VANC forwarder' /usr/local/lib/libavdevice.so \
+      && grep -a -q 'nexencoder effect stack' /usr/local/lib/libavfilter.so; then
+      log "FFmpeg ${version} with DeckLink and the VANC forwarder is already installed (${bin})"
       return 0
     fi
   fi
@@ -84,6 +120,12 @@ install_ffmpeg() {
   echo "${sha}  ${work}/ffmpeg.tar.xz" | sha256sum -c -
   tar -xJf "${work}/ffmpeg.tar.xz" -C "$work"
   src="${work}/ffmpeg-${version}"
+  log "patching DeckLink capture to forward VANC captions and SCTE-104"
+  python3 -c 'import sys; from nexencoder.decklink_patch import patch_file; patch_file(sys.argv[1])' \
+    "${src}/libavdevice/decklink_dec.cpp"
+  log "installing the nexeffect squeeze and CG filter"
+  python3 -c 'import sys; from nexencoder.effect_patch import install_filter; install_filter(sys.argv[1])' \
+    "$src"
   log "building FFmpeg ${version} with DeckLink headers in ${sdk}"
   (
     cd "$src"
@@ -97,6 +139,8 @@ install_ffmpeg() {
       --disable-doc \
       --disable-ffplay \
       --enable-gpl \
+      --enable-version3 \
+      --enable-nonfree \
       --enable-libx264 \
       --enable-openssl \
       --enable-libopus \
@@ -110,10 +154,24 @@ install_ffmpeg() {
   $SUDO ldconfig
   rm -rf "$work"
   "$bin" -buildconf | grep -q -- '--enable-decklink'
+  "$bin" -buildconf | grep -q -- '--enable-nonfree'
+  "$bin" -buildconf | grep -q -- '--enable-version3'
+  grep -a -q 'nexencoder VANC forwarder' /usr/local/lib/libavdevice.so
+  grep -a -q 'nexencoder effect stack' /usr/local/lib/libavfilter.so
   log "installed ${bin} ($("$bin" -version | head -n 1))"
 }
 
 if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt-get >/dev/null 2>&1; then
+  sdk_ok=0
+  for dir in /opt/decklink-sdk /usr/include; do
+    if [ -f "${dir}/DeckLinkAPI.h" ] && [ -f "${dir}/DeckLinkAPIDispatch.cpp" ] && [ -f "${dir}/DeckLinkAPIVersion.h" ]; then
+      sdk_ok=1
+      break
+    fi
+  done
+  if [ "$sdk_ok" -eq 0 ]; then
+    die "DeckLink SDK headers not found. Copy the Desktop Video Linux include directory to /opt/decklink-sdk (DeckLinkAPI.h, DeckLinkAPIDispatch.cpp, DeckLinkAPIVersion.h)."
+  fi
   prom_missing=()
   for pkg in prometheus prometheus-node-exporter; do
     dpkg -s "$pkg" >/dev/null 2>&1 || prom_missing+=("$pkg")
@@ -133,18 +191,12 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
     $SUDO cp config/prometheus.yml /etc/prometheus/prometheus.yml
     log "installed /etc/prometheus/prometheus.yml"
   fi
-  pin_listen /etc/default/prometheus "127.0.0.1:9090"
-  pin_listen /etc/default/prometheus-node-exporter "127.0.0.1:9100"
+  pin_listen /etc/default/prometheus "127.0.0.1:9090" prometheus.service
+  pin_listen /etc/default/prometheus-node-exporter "127.0.0.1:9100" prometheus-node-exporter.service
   unit_tmp="$(mktemp)"
   sed "s|@ROOT@|$(pwd)|g" systemd/nexencoder-console.service > "$unit_tmp"
   $SUDO cp "$unit_tmp" /etc/systemd/system/nexencoder-console.service
   rm -f "$unit_tmp"
-  if command -v systemctl >/dev/null 2>&1; then
-    $SUDO systemctl daemon-reload
-    $SUDO systemctl enable prometheus prometheus-node-exporter nexencoder-console
-    $SUDO systemctl restart prometheus prometheus-node-exporter nexencoder-console \
-      || log "WARNING: could not start prometheus or the console"
-  fi
 
   media_missing=()
   for pkg in gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
@@ -156,6 +208,15 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
     log "installing via apt: ${media_missing[*]}"
     $SUDO apt-get update -qq
     $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${media_missing[@]}"
+  fi
+  if apt-cache show gstreamer1.0-wpe >/dev/null 2>&1; then
+    if ! dpkg -s gstreamer1.0-wpe >/dev/null 2>&1; then
+      log "installing gstreamer1.0-wpe for HTML CG"
+      $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gstreamer1.0-wpe \
+        || log "WARNING: gstreamer1.0-wpe did not install. HTML layers use Chromium when it is on PATH."
+    fi
+  else
+    log "WARNING: gstreamer1.0-wpe is not in apt. HTML layers use Chromium when it is on PATH."
   fi
 
   if command -v tsp >/dev/null 2>&1; then
@@ -203,6 +264,9 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
   $SUDO cp systemd/mediamtx.service /etc/systemd/system/mediamtx.service
   if command -v systemctl >/dev/null 2>&1; then
     $SUDO systemctl daemon-reload
+    $SUDO systemctl enable prometheus prometheus-node-exporter nexencoder-console
+    $SUDO systemctl restart prometheus prometheus-node-exporter nexencoder-console \
+      || log "WARNING: could not start prometheus or the console"
     if [ -x /usr/local/bin/mediamtx ]; then
       $SUDO systemctl enable mediamtx
       $SUDO systemctl restart mediamtx || log "WARNING: could not start mediamtx"

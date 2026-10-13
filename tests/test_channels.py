@@ -44,6 +44,12 @@ def test_normalize_keeps_legal_values_and_drops_the_rest():
     assert config["outputs"]["A"]["url"] == ""
     assert config["outputs"]["B"]["host"] == "origin.example"
     assert config["outputs"]["B"]["bitrate"] == 18
+    assert config["outputs"]["B"]["port"] == 9001
+    assert config["inputs"]["A"]["source"] == "sdi"
+    listener = normalize_config({
+        "outputs": {"B": {"mode": "srt-listener", "port": 9001}},
+    })
+    assert listener["outputs"]["B"]["port"] == 9101
 
 
 def test_snapshot_omits_resolution_until_the_input_locks():

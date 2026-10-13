@@ -21,9 +21,28 @@ class SignalMode:
 MODES: dict[str, SignalMode] = {
     "1080i59.94": SignalMode("1080i59.94", "Hi59", 1920, 1080, 59.94, 30000 / 1001, True, "tff"),
     "1080i50": SignalMode("1080i50", "Hi50", 1920, 1080, 50.0, 25.0, True, "tff"),
+    "1080p59.94": SignalMode("1080p59.94", "Hp59", 1920, 1080, 60000 / 1001, 60000 / 1001, False, None),
+    "1080p50": SignalMode("1080p50", "Hp50", 1920, 1080, 50.0, 50.0, False, None),
     "720p59.94": SignalMode("720p59.94", "hp59", 1280, 720, 60000 / 1001, 60000 / 1001, False, None),
     "720p50": SignalMode("720p50", "hp50", 1280, 720, 50.0, 50.0, False, None),
 }
+
+LAVFI_RATES = {
+    "1080i59.94": "30000/1001",
+    "1080i50": "25",
+    "1080p59.94": "60000/1001",
+    "1080p50": "50",
+    "720p59.94": "60000/1001",
+    "720p50": "50",
+}
+
+
+def lavfi_rate(mode: SignalMode) -> str:
+    """Exact lavfi frame rate. 1080i counts frames, not fields."""
+    try:
+        return LAVFI_RATES[mode.format_name]
+    except KeyError as exc:
+        raise ValueError(f"unsupported raster {mode.format_name!r}") from exc
 
 
 def signal_mode(format_name: str) -> SignalMode:

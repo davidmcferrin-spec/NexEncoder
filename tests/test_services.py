@@ -23,8 +23,8 @@ def test_list_units_parses_show():
 
     body = list_units(run)
     assert body["systemctl"] is True
-    assert len(body["units"]) == 7
-    assert body["units"][2]["name"] == "prometheus.service"
+    assert len(body["units"]) == 6
+    assert body["units"][1]["name"] == "prometheus.service"
     assert body["units"][2]["active"] == "active"
     assert body["units"][2]["enabled"] == "enabled"
 

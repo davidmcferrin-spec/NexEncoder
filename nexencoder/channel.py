@@ -3,7 +3,8 @@
 ``python -m nexencoder.channel --id A`` is what the systemd template starts.
 A dead child, a failed exec, or a stalled frame counter restarts the pipeline
 with backoff. A config error exits 78 so systemd leaves the unit failed until
-an operator fixes it.
+an operator fixes it. VANC datagrams from the patched DeckLink demuxer are
+translated to SCTE-35 and posted to the console.
 """
 
 from __future__ import annotations
@@ -18,9 +19,35 @@ import threading
 import time
 from pathlib import Path
 
-from .channels import load_config
-from .pipeline import capture_argv, egress_argv, splice_argv
+from .cgfeed import SlotWriter, supervise
+from .channels import INPUT_SRT_PORTS, load_config
+from .effects import (
+    bars_path,
+    effect_path,
+    layers_path,
+    live_slot_path,
+    loop_slot_path,
+    pcm_path,
+    signal_path,
+    still_path,
+    wait_path,
+    write_flag,
+    write_wait,
+)
+from .livefeed import (
+    PcmRing,
+    check_loop_file,
+    ident_text,
+    loop_argv,
+    run_srt_ingest,
+    run_video_pipe,
+    srt_ingest_argv,
+    watch_decklink_signal,
+)
+from .pipeline import VANC_PORT, capture_argv, clock_argv, egress_argv, splice_argv
+from .signal import signal_mode
 from .status import parse_ffmpeg_progress, progress_frame
+from .vanc_feed import start_vanc_thread
 
 log = logging.getLogger("nexencoder.channel")
 
@@ -79,14 +106,16 @@ def _consume_progress(read_fd: int, dest: Path) -> None:
         log.warning("progress reader stopped", exc_info=True)
 
 
-def _popen_with_progress(argv: list[str], dest: Path) -> subprocess.Popen:
+def _popen_with_progress(argv: list[str], dest: Path, stderr=None) -> subprocess.Popen:
     """Run ffmpeg with -progress pipe:3 and mirror the latest block onto dest."""
     read_fd, write_fd = os.pipe()
     try:
         if write_fd != 3:
             os.dup2(write_fd, 3)
             os.close(write_fd)
-        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, pass_fds=(3,), close_fds=True)
+        proc = subprocess.Popen(
+            argv, stdout=subprocess.PIPE, stderr=stderr, pass_fds=(3,), close_fds=True
+        )
     except Exception:
         os.close(read_fd)
         try:
@@ -115,6 +144,10 @@ def _stop_children(children: list[subprocess.Popen], pause) -> None:
             proc.kill()
 
 
+def _running(proc: subprocess.Popen | None) -> bool:
+    return proc is not None and proc.poll() is None
+
+
 def run_channel(
     channel_id: str,
     config_path: Path,
@@ -130,6 +163,9 @@ def run_channel(
     backoff_start: float = BACKOFF_START,
     backoff_cap: float = BACKOFF_CAP,
     pipe_progress: bool = False,
+    vanc_listen: bool = False,
+    manage_effects: bool = False,
+    manage_live: bool = False,
 ) -> int:
     config = load_config(config_path)
     spec_in = config["inputs"][channel_id]
@@ -142,10 +178,42 @@ def run_channel(
         state_dir.mkdir(parents=True, exist_ok=True)
         progress_file = state_dir / f"{channel_id}.progress"
         progress_arg = progress_target(pipe_progress, progress_file)
+    effect_file = str(effect_path(state_dir, channel_id)) if state_dir is not None else None
+    still_file = str(still_path(state_dir, channel_id)) if state_dir is not None else None
+    source = spec_in.get("source", "sdi")
+    hold_file = str(wait_path(state_dir, channel_id)) if state_dir is not None else None
+    pcm_file = None
+    waiting = spec_in.get("waiting", "slate")
+    loop = spec_in.get("loop", "") or ""
+    if state_dir is not None:
+        if waiting == "loop":
+            try:
+                check_loop_file(loop)
+            except ValueError as exc:
+                log.warning("channel %s %s; using the waiting slate", channel_id, exc)
+                waiting = "slate"
+                loop = ""
+        live = str(live_slot_path(state_dir, channel_id)) if source == "srt" else ""
+        shown = str(loop_slot_path(state_dir, channel_id)) if waiting == "loop" else ""
+        write_wait(state_dir, channel_id, waiting, ident_text(channel_id), shown, live)
+        if not bars_path(state_dir, channel_id).is_file():
+            write_flag(bars_path(state_dir, channel_id), False)
+        write_flag(signal_path(state_dir, channel_id), source == "sdi")
+        if source == "srt":
+            pcm_file = str(pcm_path(state_dir, channel_id))
     try:
-        capture = capture_argv(
-            channel_id, spec_in["device"], spec_in["format"], spec_out["bitrate"], progress_path=progress_arg,
-        )
+        if source == "srt":
+            capture = clock_argv(
+                channel_id, spec_in["format"], spec_out["bitrate"],
+                progress_path=progress_arg, effect_state=effect_file,
+                hold_path=hold_file, pcm_path=pcm_file,
+            )
+        else:
+            capture = capture_argv(
+                channel_id, spec_in["device"], spec_in["format"], spec_out["bitrate"],
+                progress_path=progress_arg, effect_state=effect_file, still_path=still_file,
+                hold_path=hold_file, pcm_path=pcm_file,
+            )
         splice = splice_argv(channel_id)
         egress = egress_argv(
             channel_id,
@@ -160,11 +228,54 @@ def run_channel(
         return EXIT_CONFIG
 
     children: list[subprocess.Popen] = []
+    splice_proc: list[subprocess.Popen | None] = [None]
     stopping = False
+    vanc_stop = threading.Event()
+    effect_stop = threading.Event()
+    if manage_effects and state_dir is not None:
+        threading.Thread(
+            target=supervise,
+            args=(state_dir, channel_id, effect_stop),
+            name="nexencoder-cg",
+            daemon=True,
+        ).start()
+        log.info("channel %s CG supervisor watching %s", channel_id, layers_path(state_dir, channel_id))
+    if manage_live and state_dir is not None and source == "srt":
+        mode = signal_mode(spec_in["format"])
+        threading.Thread(
+            target=run_srt_ingest,
+            args=(
+                srt_ingest_argv(INPUT_SRT_PORTS[channel_id], spec_in["format"], still_file or ""),
+                SlotWriter(live_slot_path(state_dir, channel_id), mode.width, mode.height),
+                PcmRing(pcm_path(state_dir, channel_id)),
+                signal_path(state_dir, channel_id),
+                effect_stop,
+            ),
+            name="nexencoder-srt",
+            daemon=True,
+        ).start()
+    if manage_live and state_dir is not None and waiting == "loop" and loop:
+        mode = signal_mode(spec_in["format"])
+        threading.Thread(
+            target=run_video_pipe,
+            args=(
+                loop_argv(loop, spec_in["format"]),
+                SlotWriter(loop_slot_path(state_dir, channel_id), mode.width, mode.height),
+                effect_stop,
+            ),
+            name="nexencoder-loop",
+            daemon=True,
+        ).start()
+    previous_port = os.environ.get("NEXENCODER_VANC_PORT")
+    if vanc_listen:
+        os.environ["NEXENCODER_VANC_PORT"] = str(VANC_PORT[channel_id])
+        start_vanc_thread(channel_id, vanc_stop, lambda: _running(splice_proc[0]))
 
     def stop(*_args) -> None:
         nonlocal stopping
         stopping = True
+        vanc_stop.set()
+        effect_stop.set()
         _stop_children(children, pause)
 
     if install_signals:
@@ -178,18 +289,32 @@ def run_channel(
         started: list[subprocess.Popen] = []
         try:
             if pipe_progress and progress_file is not None and spawn is _spawn:
-                ffmpeg = _popen_with_progress(capture, progress_file)
+                stderr = subprocess.PIPE if manage_live and source == "sdi" else None
+                ffmpeg = _popen_with_progress(capture, progress_file, stderr=stderr)
             else:
-                ffmpeg = spawn(capture, stdout=subprocess.PIPE)
+                extra = {}
+                if manage_live and source == "sdi":
+                    extra["stderr"] = subprocess.PIPE
+                ffmpeg = spawn(capture, stdout=subprocess.PIPE, **extra)
             started.append(ffmpeg)
-            tsp = spawn(splice, stdin=ffmpeg.stdout)
-            started.append(tsp)
-            if ffmpeg.stdout is not None:
-                ffmpeg.stdout.close()
+            if manage_live and source == "sdi" and state_dir is not None and ffmpeg.stderr is not None:
+                threading.Thread(
+                    target=watch_decklink_signal,
+                    args=(ffmpeg.stderr, signal_path(state_dir, channel_id), effect_stop),
+                    name="nexencoder-signal",
+                    daemon=True,
+                ).start()
+            # Bind the program reader before spliceinject starts sending.
             out = spawn(egress)
             started.append(out)
+            tsp = spawn(splice, stdin=ffmpeg.stdout)
+            started.append(tsp)
+            splice_proc[0] = tsp
+            if ffmpeg.stdout is not None:
+                ffmpeg.stdout.close()
         except OSError as exc:
             log.error("channel %s failed to start: %s", channel_id, exc)
+            splice_proc[0] = None
             _stop_children(started, pause)
             notify("WATCHDOG=1\n")
             pause(delay)
@@ -214,6 +339,7 @@ def run_channel(
                 stalled = True
                 break
         _stop_children(children, pause)
+        splice_proc[0] = None
         if stopping or (cycles is not None and ran >= cycles):
             break
         reason = "stalled" if stalled else "exited"
@@ -224,6 +350,13 @@ def run_channel(
             delay = backoff_start
         else:
             delay = min(delay * 2, backoff_cap)
+    vanc_stop.set()
+    effect_stop.set()
+    if vanc_listen:
+        if previous_port is None:
+            os.environ.pop("NEXENCODER_VANC_PORT", None)
+        else:
+            os.environ["NEXENCODER_VANC_PORT"] = previous_port
     return 0
 
 
@@ -235,7 +368,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hls", type=Path, default=Path(os.environ.get("NEXENCODER_HLS", "/var/lib/nexencoder/hls")))
     parser.add_argument("--state", type=Path, default=Path(os.environ.get("NEXENCODER_STATE", "/var/lib/nexencoder/state")))
     args = parser.parse_args(argv)
-    return run_channel(args.id, args.config, args.hls, args.state, pipe_progress=(os.name == "posix"))
+    return run_channel(
+        args.id, args.config, args.hls, args.state,
+        pipe_progress=(os.name == "posix"),
+        vanc_listen=(os.name == "posix"),
+        manage_effects=(os.name == "posix"),
+        manage_live=(os.name == "posix"),
+    )
 
 
 if __name__ == "__main__":

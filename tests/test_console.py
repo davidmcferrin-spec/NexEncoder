@@ -173,3 +173,69 @@ def test_journal_stream_and_missing_systemctl():
         assert status == 400
     finally:
         httpd.shutdown()
+
+
+def test_effect_recall_and_normalize_leave_the_pipeline_running(tmp_path):
+    from nexencoder.channels import save_config
+
+    config = tmp_path / "config.json"
+    state = tmp_path / "state"
+    save_config(config, {})
+    httpd, port = _start(Console(
+        ROOT_WEB, config_path=config, state_dir=state, html_backend=lambda: "none",
+    ))
+    try:
+        status, listed = _get(port, "/api/effects/presets")
+        assert status == 200 and json.loads(listed)["html_renderer"] == "none"
+        saved = _post(port, "/api/effects/presets", {
+            "name": "sidebar",
+            "format": "1080i59.94",
+            "corners": [[480, 0], [1920, 0], [480, 1080], [1920, 1080]],
+            "in_frames": 12,
+            "out_frames": 0,
+            "layers": [{"level": -1, "source": {"type": "html", "url": "/cg/bug.html"}}],
+        })
+        assert saved["preset"]["name"] == "sidebar"
+        recalled = _post(port, "/api/channels/A/effects/recall", {"preset": "sidebar"})
+        assert recalled["frames"] == 12 and "transparent" in recalled["warning"]
+        assert (state / "A.effect").read_text(encoding="utf-8").startswith("NXSQ 1")
+        cleared = _post(port, "/api/channels/A/effects/normalize", {"frames": 0})
+        assert cleared["normalized"] is True and cleared["frames"] == 0
+        (state / "A.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+        with urlopen(f"http://127.0.0.1:{port}/api/channels/A/still", timeout=3) as response:
+            assert response.status == 200
+            assert response.read().startswith(b"\xff\xd8")
+    finally:
+        httpd.shutdown()
+
+
+def test_bars_toggle_does_not_rewrite_the_channel_config(tmp_path):
+    httpd, port = _start(Console(
+        ROOT_WEB,
+        config_path=tmp_path / "config.json",
+        state_dir=tmp_path / "state",
+    ))
+    try:
+        turned_on = _post(port, "/api/channels/A/bars", {"enabled": True})
+        assert turned_on["enabled"] is True
+        status, body = _get(port, "/api/config")
+        assert status == 200
+        listing = json.loads(body)
+        assert listing["bars"]["A"] is True
+        assert listing["bars"]["B"] is False
+        assert listing["config"]["inputs"]["A"]["source"] == "sdi"
+        turned_off = _post(port, "/api/channels/A/bars", {"enabled": False})
+        assert turned_off["enabled"] is False
+    finally:
+        httpd.shutdown()
+
+
+def _post(port: int, path: str, payload: dict) -> dict:
+    request = Request(
+        f"http://127.0.0.1:{port}{path}",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"X-Requested-With": "NexEncoder", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=3) as response:
+        return json.loads(response.read().decode("utf-8"))

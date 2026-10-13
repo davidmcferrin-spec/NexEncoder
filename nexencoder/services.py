@@ -14,7 +14,6 @@ import subprocess
 from typing import Callable
 
 ALLOWED_UNITS: tuple[str, ...] = (
-    "nexencoder.service",
     "nexencoder-console.service",
     "prometheus.service",
     "prometheus-node-exporter.service",

@@ -18,7 +18,21 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .channels import load_config, save_config, snapshot_for
+from .cgfeed import detect_html_backend
 from .decklink import list_devices
+from .effects import (
+    bars_path,
+    delete_preset,
+    load_presets,
+    normalize_channel,
+    preset_json,
+    read_flag,
+    recall_effect,
+    still_path,
+    upsert_preset,
+    write_flag,
+)
+from .livefeed import check_loop_file
 from .errors import ParseError
 from .metrics import CATALOG, render_metrics
 from .pipeline import SPLICE_PORT, preview_path, sections_from_mom, whep_url
@@ -53,6 +67,7 @@ class Console:
         device_lister=None,
         splice_sender=None,
         sideband: Sideband | None = None,
+        html_backend=None,
     ) -> None:
         repo = Path(__file__).resolve().parents[1]
         self.web_root = web_root.resolve()
@@ -64,6 +79,7 @@ class Console:
         self.device_lister = device_lister or list_devices
         self.splice_sender = splice_sender
         self.sideband = sideband or Sideband()
+        self.html_backend = html_backend or detect_html_backend
 
     def metrics_text(self) -> str:
         config = load_config(self.config_path)
@@ -121,7 +137,12 @@ def make_handler(console: Console):
                 elif path == "/api/catalog":
                     self._json(200, {"ok": True, "cards": _catalog_json()})
                 elif path == "/api/config":
-                    self._json(200, {"ok": True, "config": load_config(console.config_path)})
+                    config = load_config(console.config_path)
+                    bars = {
+                        channel_id: read_flag(bars_path(console.state_dir, channel_id), False)
+                        for channel_id in ("A", "B")
+                    }
+                    self._json(200, {"ok": True, "config": config, "bars": bars})
                 elif path == "/api/devices":
                     self._json(200, {"ok": True, "devices": console.device_lister()})
                 elif path == "/api/preview":
@@ -133,6 +154,11 @@ def make_handler(console: Console):
                     self._json(200, {"ok": True, "channels": channels})
                 elif path == "/api/sideband":
                     self._json(200, {"ok": True, "events": console.sideband.recent()})
+                elif path == "/api/effects/presets":
+                    self._presets()
+                elif path.startswith("/api/channels/") and path.endswith("/still"):
+                    channel = unquote(path[len("/api/channels/"):-len("/still")].strip("/"))
+                    self._still(channel)
                 elif path == "/api/services":
                     self._json(200, list_units(console.unit_runner))
                 elif path.startswith("/api/services/") and path.endswith("/log"):
@@ -170,8 +196,16 @@ def make_handler(console: Console):
                     self._json(200, act(unquote(parts[2]), action, console.unit_runner))
                 elif parts == ["api", "sideband"]:
                     self._save_sideband(body)
+                elif parts == ["api", "effects", "presets"]:
+                    self._save_preset(body)
+                elif len(parts) == 5 and parts[0] == "api" and parts[1] == "channels" and parts[3] == "effects" and parts[4] == "recall":
+                    self._recall(unquote(parts[2]), body)
+                elif len(parts) == 5 and parts[0] == "api" and parts[1] == "channels" and parts[3] == "effects" and parts[4] == "normalize":
+                    self._normalize(unquote(parts[2]), body)
                 elif len(parts) == 4 and parts[0] == "api" and parts[1] == "channels" and parts[3] == "scte":
                     self._inject_scte(unquote(parts[2]), body)
+                elif len(parts) == 4 and parts[0] == "api" and parts[1] == "channels" and parts[3] == "bars":
+                    self._bars(unquote(parts[2]), body)
                 else:
                     self._json(404, {"ok": False, "detail": "Unknown action"})
             except ServiceError as exc:
@@ -191,8 +225,22 @@ def make_handler(console: Console):
             raw = json.loads(body.decode("utf-8") or "{}")
             if not isinstance(raw, dict):
                 raise ValueError("config must be an object")
+            from .channels import normalize_config
+            candidate = normalize_config(raw)
+            for channel_id, spec in candidate["inputs"].items():
+                if spec.get("waiting") == "loop":
+                    check_loop_file(spec.get("loop") or "")
             saved = save_config(console.config_path, raw)
             self._json(200, {"ok": True, "config": saved})
+
+        def _bars(self, channel_id: str, body: bytes) -> None:
+            if channel_id not in ("A", "B"):
+                raise ValueError("channel must be A or B")
+            raw = json.loads(body.decode("utf-8") or "{}")
+            if not isinstance(raw, dict) or not isinstance(raw.get("enabled"), bool):
+                raise ValueError("enabled must be true or false")
+            write_flag(bars_path(console.state_dir, channel_id), raw["enabled"])
+            self._json(200, {"ok": True, "channel": channel_id, "enabled": raw["enabled"]})
 
         def _save_sideband(self, body: bytes) -> None:
             raw = json.loads(body.decode("utf-8") or "{}")
@@ -239,6 +287,60 @@ def make_handler(console: Console):
                 "text": f"{len(sections)} section(s) to port {port}",
             })
             self._json(200, {"ok": True, "channel": channel_id, "sections": len(sections), "port": port})
+
+        def _presets(self) -> None:
+            presets = [preset_json(item) for item in load_presets(console.state_dir)]
+            self._json(200, {"ok": True, "presets": presets, "html_renderer": console.html_backend()})
+
+        def _save_preset(self, body: bytes) -> None:
+            raw = json.loads(body.decode("utf-8") or "{}")
+            if not isinstance(raw, dict):
+                raise ValueError("preset must be an object")
+            if raw.get("delete") is True:
+                name = raw.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    raise ValueError("preset name is required")
+                delete_preset(console.state_dir, name.strip())
+                self._json(200, {"ok": True, "presets": [preset_json(item) for item in load_presets(console.state_dir)]})
+                return
+            preset = upsert_preset(console.state_dir, raw)
+            self._json(200, {"ok": True, "preset": preset_json(preset)})
+
+        def _recall(self, channel_id: str, body: bytes) -> None:
+            raw = json.loads(body.decode("utf-8") or "{}")
+            if not isinstance(raw, dict):
+                raise ValueError("recall body must be an object")
+            config = load_config(console.config_path)
+            result = recall_effect(console.state_dir, channel_id, raw, config)
+            if result.get("html") and console.html_backend() == "none":
+                result["warning"] = "HTML renderer is not installed; those layers stay transparent"
+            self._json(200, {"ok": True, **result})
+
+        def _normalize(self, channel_id: str, body: bytes) -> None:
+            raw = json.loads(body.decode("utf-8") or "{}")
+            if not isinstance(raw, dict):
+                raise ValueError("normalize body must be an object")
+            config = load_config(console.config_path)
+            result = normalize_channel(console.state_dir, channel_id, raw, config)
+            self._json(200, {"ok": True, **result})
+
+        def _still(self, channel_id: str) -> None:
+            if channel_id not in ("A", "B"):
+                self._json(404, {"ok": False, "detail": "Not found"})
+                return
+            path = still_path(console.state_dir, channel_id).resolve()
+            root = console.state_dir.resolve()
+            if path != root and root not in path.parents:
+                self._json(404, {"ok": False, "detail": "Not found"})
+                return
+            if not path.is_file():
+                self._json(404, {"ok": False, "detail": "No still yet"})
+                return
+            data = path.read_bytes()
+            if not data.startswith(b"\xff\xd8"):
+                self._json(404, {"ok": False, "detail": "Still is not ready"})
+                return
+            self._bytes(200, "image/jpeg", data)
 
         def _prom(self, kind: str, query: dict[str, str]) -> None:
             try:

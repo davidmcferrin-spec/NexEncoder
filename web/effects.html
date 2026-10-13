@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en" data-theme-pref="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Effects · NexEncoder</title>
+  <script>
+    (function(){try{var p=localStorage.getItem('nexapp-theme')||'system';
+      var d=p==='dark'||(p==='system'&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';
+      document.documentElement.setAttribute('data-theme',d);
+      document.documentElement.setAttribute('data-theme-pref',p);
+    }catch(e){}})();
+  </script>
+  <link rel="stylesheet" href="assets/app.css">
+  <link rel="stylesheet" href="assets/encoder.css">
+</head>
+<body class="page-shell">
+  <header class="shell-top">
+    <a class="shell-brand" href="index.html">NexEncoder</a>
+    <div class="shell-top-actions">
+      <button type="button" class="btn-text" id="theme-toggle" title="Theme">Theme</button>
+    </div>
+  </header>
+  <aside class="shell-sidebar">
+    <div class="side-profile">
+      <span class="avatar avatar-fallback">E</span>
+      <div class="side-profile-text">
+        <strong>Local console</strong>
+        <span>Operator</span>
+      </div>
+    </div>
+    <nav class="side-nav" aria-label="Primary">
+      <a href="index.html"><span class="nav-ico">▦</span>Dashboard</a>
+      <a href="inputs.html"><span class="nav-ico">▤</span>Inputs</a>
+      <a href="outputs.html"><span class="nav-ico">↗</span>Outputs</a>
+      <a href="monitor.html"><span class="nav-ico">◉</span>Monitor</a>
+      <a class="is-active" href="effects.html"><span class="nav-ico">▣</span>Effects</a>
+      <a href="metrics.html"><span class="nav-ico">◇</span>Metrics</a>
+      <a href="services.html"><span class="nav-ico">⚙</span>Services</a>
+    </nav>
+    <div class="side-foot">HD-SDI · SRT / HLS</div>
+  </aside>
+  <main class="shell-main">
+    <div class="page-head">
+      <div>
+        <h1>Effects</h1>
+        <p class="lead">Squeeze the primary and stack up to four CG layers. Recall and normalize stay on the running channel, so 608/708 and SCTE-104/35 keep passing.</p>
+      </div>
+    </div>
+    <div class="effects-layout">
+      <section class="panel">
+        <div class="effects-toolbar">
+          <label for="effect-channel">Channel</label>
+          <select id="effect-channel">
+            <option value="A">Input A</option>
+            <option value="B">Input B</option>
+          </select>
+          <button type="button" class="secondary" id="refresh-still">Refresh still</button>
+          <span class="muted" id="still-note">Clean still refreshes every 8 seconds.</span>
+        </div>
+        <div class="stage" id="stage">
+          <div class="stage-layers" id="behind-layers"></div>
+          <canvas id="squeeze" width="1920" height="1080"></canvas>
+          <div class="stage-layers stage-front" id="front-layers"></div>
+        </div>
+        <div class="corner-grid" id="corner-grid"></div>
+        <div class="grid-2">
+          <div class="field-block">
+            <label for="in-frames">Squeeze in (frames)</label>
+            <input id="in-frames" type="number" min="0" max="600" value="15">
+          </div>
+          <div class="field-block">
+            <label for="out-frames">Normalize (frames)</label>
+            <input id="out-frames" type="number" min="0" max="600" value="15">
+          </div>
+        </div>
+        <p class="muted">0 frames is a cut. Any other count moves the four corners linearly, counted in input frames.</p>
+      </section>
+      <section class="panel">
+        <h2>CG layers</h2>
+        <p class="muted">Level −4 is furthest behind the video and +4 is the top. 0 is the video input. A negative level shows in the area the squeeze opens. SDI fill/key is DeckLink Duo 2 (3) and (4), one pair shared by both channels.</p>
+        <div id="layer-list"></div>
+        <h2>Preset</h2>
+        <div class="field-block">
+          <label for="preset-name">Name</label>
+          <input id="preset-name" type="text" maxlength="64" autocomplete="off" spellcheck="false">
+        </div>
+        <p class="save-row">
+          <button type="button" id="save-preset">Save preset</button>
+          <button type="button" id="recall-effect">Recall on output</button>
+          <button type="button" class="secondary" id="normalize-effect">Normalize</button>
+        </p>
+        <p class="save-row">
+          <span class="ok" id="effect-ok" hidden></span>
+          <span class="error" id="effect-error" role="alert" hidden></span>
+        </p>
+        <ul class="preset-list" id="preset-list"></ul>
+      </section>
+    </div>
+  </main>
+  <footer class="shell-footer">
+    <span>NexEncoder</span>
+    <span class="footer-version">v0.1.0</span>
+  </footer>
+  <script src="assets/theme.js"></script>
+  <script src="assets/console.js"></script>
+  <script src="assets/effects.js"></script>
+</body>
+</html>

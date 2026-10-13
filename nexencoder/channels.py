@@ -9,8 +9,13 @@ from .metrics import InputStatus, OutputStatus, Snapshot
 from .signal import signal_mode
 
 CHANNELS = ("A", "B")
-FORMATS = frozenset({"1080i59.94", "1080i50", "720p59.94", "720p50"})
+FORMATS = frozenset({"1080i59.94", "1080i50", "1080p59.94", "1080p50", "720p59.94", "720p50"})
 MODES = frozenset({"srt-caller", "srt-listener", "hls-push", "hls-pull"})
+SOURCES = frozenset({"sdi", "srt"})
+WAITING = frozenset({"slate", "loop", "bars"})
+# Input listeners are fixed. An output listener must not bind these ports.
+INPUT_SRT_PORTS = {"A": 9001, "B": 9002}
+RESERVED_LISTENER_PORTS = frozenset(INPUT_SRT_PORTS.values())
 
 DEFAULT_DEVICES = {
     "A": "DeckLink Duo 2 (1)",
@@ -21,12 +26,12 @@ DEFAULT_DEVICES = {
 def default_config() -> dict:
     return {
         "inputs": {
-            "A": {"format": "1080i59.94", "device": DEFAULT_DEVICES["A"]},
-            "B": {"format": "1080i59.94", "device": DEFAULT_DEVICES["B"]},
+            "A": {"format": "1080i59.94", "device": DEFAULT_DEVICES["A"], "source": "sdi", "waiting": "slate", "loop": ""},
+            "B": {"format": "1080i59.94", "device": DEFAULT_DEVICES["B"], "source": "sdi", "waiting": "slate", "loop": ""},
         },
         "outputs": {
             "A": {"mode": "srt-listener", "bitrate": 8, "host": "", "port": 9000, "url": ""},
-            "B": {"mode": "srt-listener", "bitrate": 8, "host": "", "port": 9001, "url": ""},
+            "B": {"mode": "srt-listener", "bitrate": 8, "host": "", "port": 9101, "url": ""},
         },
     }
 
@@ -44,9 +49,14 @@ def normalize_config(raw: dict) -> dict:
         src = incoming_inputs.get(channel_id) if isinstance(incoming_inputs.get(channel_id), dict) else {}
         if src.get("format") in FORMATS:
             base["inputs"][channel_id]["format"] = src["format"]
-        device = src.get("device")
-        if isinstance(device, str) and device.strip() and len(device) <= 128 and "\n" not in device:
-            base["inputs"][channel_id]["device"] = device.strip()
+        base["inputs"][channel_id]["device"] = DEFAULT_DEVICES[channel_id]
+        if src.get("source") in SOURCES:
+            base["inputs"][channel_id]["source"] = src["source"]
+        if src.get("waiting") in WAITING:
+            base["inputs"][channel_id]["waiting"] = src["waiting"]
+        loop = src.get("loop")
+        if isinstance(loop, str) and len(loop) <= 500 and "\n" not in loop and "\r" not in loop:
+            base["inputs"][channel_id]["loop"] = loop.strip()
         out = incoming_outputs.get(channel_id) if isinstance(incoming_outputs.get(channel_id), dict) else {}
         if out.get("mode") in MODES:
             base["outputs"][channel_id]["mode"] = out["mode"]
@@ -58,6 +68,8 @@ def normalize_config(raw: dict) -> dict:
             base["outputs"][channel_id]["host"] = host
         port = out.get("port")
         if isinstance(port, int) and not isinstance(port, bool) and 1 <= port <= 65535:
+            if base["outputs"][channel_id]["mode"] == "srt-listener" and port in RESERVED_LISTENER_PORTS:
+                port = 9101 if port == 9001 else 9102
             base["outputs"][channel_id]["port"] = port
         url = out.get("url")
         if isinstance(url, str) and len(url) <= 500 and (url == "" or url.startswith(("http://", "https://"))):

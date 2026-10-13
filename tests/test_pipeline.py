@@ -9,6 +9,7 @@ from nexencoder.channel import EXIT_CONFIG, progress_target, run_channel
 from nexencoder.channels import save_config
 from nexencoder.pipeline import (
     capture_argv,
+    clock_argv,
     egress_argv,
     sections_from_mom,
     splice_argv,
@@ -29,6 +30,13 @@ def test_capture_keeps_vanc_and_tees_preview():
     assert "libopus" in argv
     assert "-progress" in argv
     assert "+ildct+ilme" in argv
+    graph = argv[argv.index("-filter_complex") + 1]
+    assert graph.index("[0:v]split=2[vsrc][vstill]") < graph.index("nexeffect")
+    assert graph.index("[vfx]split=2[vprog]") > graph.index("nexeffect")
+    assert "interlaced=1" in graph
+    assert "nextone=hold=" in graph
+    assert argv[argv.index("-signal_loss_action") + 1] == "none"
+    assert argv[argv.index("-a53cc") + 1] == "1"
 
 
 def test_progressive_capture_skips_interlace_flags():
@@ -36,12 +44,28 @@ def test_progressive_capture_skips_interlace_flags():
     assert argv[argv.index("-format_code") + 1] == "hp59"
     assert "+ildct+ilme" not in argv
     assert "rtsp://127.0.0.1:8554/inputB" in argv
+    graph = argv[argv.index("-filter_complex") + 1]
+    assert "interlaced=0" in graph
     assert h264_level(signal_mode("1080i59.94")) == "4.1"
+    assert h264_level(signal_mode("1080p59.94")) == "4.2"
+    assert signal_mode("1080p59.94").format_code == "Hp59"
+    assert signal_mode("1080p50").format_code == "Hp50"
+
+
+def test_srt_input_keeps_an_encode_clock_without_a_still():
+    argv = clock_argv("A", "1080p59.94", 8, hold_path="/var/lib/nexencoder/state/A.wait", pcm_path="/var/lib/nexencoder/state/cg/A-live.pcm")
+    graph = argv[argv.index("-filter_complex") + 1]
+    assert argv[argv.index("-f") + 1] == "lavfi"
+    assert "color=c=black:s=1920x1080:r=60000/1001" in argv
+    assert any(item.startswith("anullsrc=") for item in argv)
+    assert "nexeffect=" in graph and "nextone=" in graph
+    assert "[vstill]" not in graph
+    assert "image2" not in argv
 
 
 def test_splice_and_srt_listener():
     splice = splice_argv("A")
-    assert "239.255.98.1:19001" in splice
+    assert "127.0.0.1:19001" in splice
     assert "127.0.0.1:19101" in splice
     assert "496/0x86" in splice
     listener = egress_argv("A", "srt-listener", "", 9000, "", "/tmp/hls")
@@ -107,9 +131,9 @@ def test_run_channel_starts_capture_splice_and_egress(tmp_path):
     assert code == 0
     assert [item[0][0] for item in calls] == ["ffmpeg", "tsp", "tsp"]
     assert calls[0][1]["stdout"] is subprocess.PIPE
-    assert calls[1][1]["stdin"] is pipes[0]
+    assert calls[2][1]["stdin"] is pipes[0]
     assert pipes[0].closed is True
-    assert "--listener" in calls[2][0]
+    assert "--listener" in calls[1][0]
     assert str(tmp_path / "state" / "A.progress") in calls[0][0]
 
 

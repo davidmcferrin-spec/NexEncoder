@@ -7,10 +7,14 @@ that ffmpeg writes to its stdout. Argv builders do not spawn processes.
 
 from __future__ import annotations
 
-from .signal import SignalMode, h264_level, signal_mode
+from .effects import STILL_SECONDS, escape_filter_value
+from .signal import SignalMode, h264_level, lavfi_rate, signal_mode
 
 FEED_PORT = {"A": 19001, "B": 19002}
 SPLICE_PORT = {"A": 19101, "B": 19102}
+VANC_PORT = {"A": 19201, "B": 19202}
+# One reader per channel, so the program feed stays on loopback unicast.
+FEED_ADDR = "127.0.0.1"
 SCTE_PID = 0x1F0
 PREVIEW_SIZE = "960:540"
 PREVIEW_RTSP = "rtsp://127.0.0.1:8554"
@@ -51,16 +55,43 @@ def _video_args(mode: SignalMode, bitrate_mbps: int) -> list[str]:
     return args
 
 
-def _filter_graph() -> str:
+def _tone_filter(hold_path: str, pcm_path: str | None) -> str:
+    hold = escape_filter_value(hold_path)
+    tone = f"nextone=hold={hold}"
+    if pcm_path:
+        tone += f":pcm={escape_filter_value(pcm_path)}"
+    return (
+        "aformat=sample_fmts=s16:sample_rates=48000:channel_layouts=stereo,"
+        f"{tone}"
+    )
+
+
+def _filter_graph(interlaced: bool, effect_state: str, hold_path: str, pcm_path: str | None = None, audio_pad: str = "0:a") -> str:
+    """Squeeze and CG run on the program before the preview split.
+
+    The still is a second branch of the input frame, taken before the
+    effect, so the builder can place corners on the clean picture. A/53
+    side data stays on the program frame: ``nexeffect`` copies it after the
+    stack is flattened. SCTE-104 is forwarded by the demuxer and never
+    enters this graph. ``nextone`` swaps in a tone while color bars are up.
+    """
     preview = (
         f"yadif=mode=0:parity=-1:deint=interlaced,"
         f"scale={PREVIEW_SIZE}:force_original_aspect_ratio=decrease,"
         f"fps=30,format=yuv420p"
     )
+    state = escape_filter_value(effect_state)
+    hold = escape_filter_value(hold_path)
+    field = 1 if interlaced else 0
     return (
-        "[0:v]split=2[vprog][vp0];"
+        "[0:v]split=2[vsrc][vstill];"
+        f"[vsrc]nexeffect=state={state}:interlaced={field}:hold={hold}[vfx];"
+        "[vfx]split=2[vprog][vp0];"
         f"[vp0]{preview}[vprev];"
-        "[0:a]asplit=2[aprog][aprev]"
+        f"[vstill]fps=1/{STILL_SECONDS},"
+        f"scale={PREVIEW_SIZE}:force_original_aspect_ratio=decrease,format=yuv420p[vstillout];"
+        f"[{audio_pad}]{_tone_filter(hold_path, pcm_path)}[atone];"
+        "[atone]asplit=2[aprog][aprev]"
     )
 
 
@@ -71,22 +102,89 @@ def capture_argv(
     bitrate_mbps: int,
     ffmpeg: str = "ffmpeg",
     progress_path: str | None = None,
+    effect_state: str | None = None,
+    still_path: str | None = None,
+    hold_path: str | None = None,
+    pcm_path: str | None = None,
 ) -> list[str]:
     """One DeckLink open: H.264/AAC MPEG-TS on stdout, proxy RTSP beside it.
 
     yuv422p10 keeps the VANC lines so CEA-708 CDPs become A/53 side data.
+    The still JPEG is rewritten every few seconds for the effect builder.
     """
     mode = signal_mode(format_name)
     progress = ["-progress", progress_path] if progress_path else []
+    state = effect_state or f"/var/lib/nexencoder/state/{channel_id}.effect"
+    still = still_path or f"/var/lib/nexencoder/state/{channel_id}.jpg"
+    hold = hold_path or f"/var/lib/nexencoder/state/{channel_id}.wait"
     return [
         ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "warning",
         *progress,
         "-f", "decklink",
         "-raw_format", "yuv422p10",
         "-audio_input", "embedded",
+        "-signal_loss_action", "none",
         "-format_code", mode.format_code,
         "-i", device,
-        "-filter_complex", _filter_graph(),
+        "-filter_complex", _filter_graph(mode.interlaced, state, hold, pcm_path),
+        "-map", "[vprog]", "-map", "[aprog]",
+        *_video_args(mode, bitrate_mbps),
+        "-f", "mpegts",
+        "-mpegts_flags", "+resend_headers",
+        "pipe:1",
+        "-map", "[vprev]", "-map", "[aprev]",
+        "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+        "-profile:v", "baseline", "-pix_fmt", "yuv420p", "-g", "30", "-b:v", "1500k",
+        "-c:a", "libopus", "-b:a", "96k", "-ar", "48000", "-ac", "2", "-application", "lowdelay",
+        "-f", "rtsp", "-rtsp_transport", "tcp",
+        preview_rtsp(channel_id),
+        "-map", "[vstillout]", "-an",
+        "-c:v", "mjpeg", "-q:v", "5",
+        "-f", "image2", "-update", "1", "-atomic_writing", "1",
+        still,
+    ]
+
+
+def clock_argv(
+    channel_id: str,
+    format_name: str,
+    bitrate_mbps: int,
+    ffmpeg: str = "ffmpeg",
+    progress_path: str | None = None,
+    effect_state: str | None = None,
+    hold_path: str | None = None,
+    pcm_path: str | None = None,
+) -> list[str]:
+    """Always-on encode for an SRT input. The picture is black until a caller connects.
+
+    The SRT listener runs in its own process and writes a live slot. This
+    process does not open that listener, so a missing caller cannot stall
+    the output.
+    """
+    mode = signal_mode(format_name)
+    progress = ["-progress", progress_path] if progress_path else []
+    state = effect_state or f"/var/lib/nexencoder/state/{channel_id}.effect"
+    hold = hold_path or f"/var/lib/nexencoder/state/{channel_id}.wait"
+    color = f"color=c=black:s={mode.width}x{mode.height}:r={lavfi_rate(mode)}"
+    field = 1 if mode.interlaced else 0
+    preview = (
+        f"yadif=mode=0:parity=-1:deint=interlaced,"
+        f"scale={PREVIEW_SIZE}:force_original_aspect_ratio=decrease,"
+        f"fps=30,format=yuv420p"
+    )
+    graph = (
+        f"[0:v]nexeffect=state={escape_filter_value(state)}:interlaced={field}:hold={escape_filter_value(hold)}[vfx];"
+        "[vfx]split=2[vprog][vp0];"
+        f"[vp0]{preview}[vprev];"
+        f"[1:a]{_tone_filter(hold, pcm_path)}[atone];"
+        "[atone]asplit=2[aprog][aprev]"
+    )
+    return [
+        ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "warning",
+        *progress,
+        "-f", "lavfi", "-i", color,
+        "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+        "-filter_complex", graph,
         "-map", "[vprog]", "-map", "[aprog]",
         *_video_args(mode, bitrate_mbps),
         "-f", "mpegts",
@@ -121,8 +219,8 @@ def splice_argv(channel_id: str, tsp: str = "tsp") -> list[str]:
         "--inject-interval", "500",
         "--min-inter-packet", "400",
         "-P", "filter", "--negate", "--pid", "0x1FFF",
-        "-O", "ip", f"239.255.98.1:{port}",
-        "--local-address", "127.0.0.1",
+        "-O", "ip", f"{FEED_ADDR}:{port}",
+        "--local-address", FEED_ADDR,
     ]
 
 
@@ -130,8 +228,8 @@ def srt_argv(channel_id: str, mode: str, host: str, port: int, tsp: str = "tsp")
     feed = FEED_PORT[channel_id]
     argv = [
         tsp,
-        "-I", "ip", f"239.255.98.1:{feed}",
-        "--local-address", "127.0.0.1",
+        "-I", "ip", f"{FEED_ADDR}:{feed}",
+        "--local-address", FEED_ADDR,
         "-O", "srt",
         "--latency", "1500",
         "--transtype", "live",
@@ -155,7 +253,7 @@ def hls_argv(
     ffmpeg: str = "ffmpeg",
 ) -> list[str]:
     feed = FEED_PORT[channel_id]
-    src = f"udp://239.255.98.1:{feed}?localaddr=127.0.0.1&reuse=1&fifo_size=2000000&overrun_nonfatal=1"
+    src = f"udp://{FEED_ADDR}:{feed}?localaddr={FEED_ADDR}&reuse=1&fifo_size=2000000&overrun_nonfatal=1"
     argv = [
         ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "warning",
         "-f", "mpegts", "-i", src,

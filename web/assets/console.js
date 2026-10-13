@@ -6,21 +6,30 @@
   var FORMATS = {
     "1080i59.94": "1080i 59.94",
     "1080i50": "1080i 50",
+    "1080p59.94": "1080p 59.94",
+    "1080p50": "1080p 50",
     "720p59.94": "720p 59.94",
     "720p50": "720p 50"
+  };
+  var SOURCES = ["sdi", "srt"];
+  var WAITING = ["slate", "loop", "bars"];
+  var ENDPOINTS = {
+    A: { sdi: "DeckLink Duo 2 (1)", srt: "SRT listener · port 9001" },
+    B: { sdi: "DeckLink Duo 2 (2)", srt: "SRT listener · port 9002" }
   };
   var MODES = ["srt-caller", "srt-listener", "hls-push", "hls-pull"];
   var DEFAULTS = {
     inputs: {
-      A: { format: "1080i59.94", device: "DeckLink Duo 2 (1)" },
-      B: { format: "1080i59.94", device: "DeckLink Duo 2 (2)" }
+      A: { format: "1080i59.94", device: "DeckLink Duo 2 (1)", source: "sdi", waiting: "slate", loop: "" },
+      B: { format: "1080i59.94", device: "DeckLink Duo 2 (2)", source: "sdi", waiting: "slate", loop: "" }
     },
     outputs: {
       A: { mode: "srt-listener", bitrate: 8, host: "", port: 9000, url: "" },
-      B: { mode: "srt-listener", bitrate: 8, host: "", port: 9001, url: "" }
+      B: { mode: "srt-listener", bitrate: 8, host: "", port: 9101, url: "" }
     }
   };
   var dirty = false;
+  var bars = { A: false, B: false };
 
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
@@ -34,9 +43,9 @@
       if (input && Object.prototype.hasOwnProperty.call(FORMATS, input.format)) {
         config.inputs[id].format = input.format;
       }
-      if (input && typeof input.device === "string" && input.device.trim() && input.device.length <= 128) {
-        config.inputs[id].device = input.device.trim();
-      }
+      if (input && SOURCES.indexOf(input.source) !== -1) config.inputs[id].source = input.source;
+      if (input && WAITING.indexOf(input.waiting) !== -1) config.inputs[id].waiting = input.waiting;
+      if (input && typeof input.loop === "string") config.inputs[id].loop = input.loop.slice(0, 500);
       var output = saved.outputs && saved.outputs[id];
       if (!output) return;
       if (MODES.indexOf(output.mode) !== -1) config.outputs[id].mode = output.mode;
@@ -48,6 +57,12 @@
       var port = Number(output.port);
       if (Number.isInteger(port) && port >= 1 && port <= 65535) {
         config.outputs[id].port = port;
+      }
+      if (config.outputs[id].mode === "srt-listener" && config.outputs[id].port === 9001) {
+        config.outputs[id].port = 9101;
+      }
+      if (config.outputs[id].mode === "srt-listener" && config.outputs[id].port === 9002) {
+        config.outputs[id].port = 9102;
       }
       if (typeof output.url === "string") config.outputs[id].url = output.url.slice(0, 500);
     });
@@ -64,7 +79,7 @@
     }
   }
 
-  function saveConfig(config) {
+  function saveConfig(config, id) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
     fetch("/api/config", {
       method: "POST",
@@ -74,13 +89,17 @@
       },
       body: JSON.stringify(config)
     }).then(function (response) {
-      if (!response.ok) throw new Error("save");
+      if (!response.ok) {
+        return response.json().then(function (body) {
+          throw new Error((body && body.detail) || "The encoder did not save this.");
+        });
+      }
       return response.json();
     }).then(function (body) {
       if (body && body.config) localStorage.setItem(STORAGE_KEY, JSON.stringify(body.config));
-    }).catch(function () {
-      var node = document.querySelector(".save-row .error:not([hidden])");
-      if (!node) return;
+    }).catch(function (err) {
+      fieldError(id, err.message || "The encoder did not save this.");
+      setSaved(id, false);
     });
   }
 
@@ -134,9 +153,26 @@
       var id = select.getAttribute("data-channel");
       if (config.inputs[id]) select.value = config.inputs[id].format;
     });
-    document.querySelectorAll("[data-key='device']").forEach(function (input) {
+    document.querySelectorAll("[data-key='source']").forEach(function (select) {
+      var id = select.getAttribute("data-channel");
+      if (config.inputs[id]) select.value = config.inputs[id].source;
+    });
+    document.querySelectorAll("[data-key='waiting']").forEach(function (select) {
+      var id = select.getAttribute("data-channel");
+      if (config.inputs[id]) select.value = config.inputs[id].waiting;
+    });
+    document.querySelectorAll("[data-key='loop']").forEach(function (input) {
       var id = input.getAttribute("data-channel");
-      if (config.inputs[id]) input.value = config.inputs[id].device;
+      if (config.inputs[id]) input.value = config.inputs[id].loop;
+    });
+    CHANNELS.forEach(function (id) {
+      var endpoint = document.getElementById("endpoint-" + id);
+      var input = config.inputs[id];
+      if (endpoint && input) endpoint.textContent = ENDPOINTS[id][input.source] || ENDPOINTS[id].sdi;
+      var row = document.querySelector("[data-loop-row='" + id + "']");
+      if (row && input) row.hidden = input.waiting !== "loop";
+      var button = document.getElementById("bars-" + id);
+      if (button) button.textContent = bars[id] ? "Bars with ident: on" : "Bars with ident: off";
     });
     document.querySelectorAll("[data-output-field]").forEach(function (input) {
       var id = input.getAttribute("data-channel");
@@ -187,7 +223,7 @@
   function persist(id) {
     try {
       dirty = true;
-      saveConfig(config);
+      saveConfig(config, id);
       fieldError(id, "");
       setSaved(id, true);
       paint();
@@ -258,19 +294,66 @@
     });
   });
 
-  document.querySelectorAll("[data-key='device']").forEach(function (input) {
+  document.querySelectorAll("[data-key='source']").forEach(function (select) {
+    select.addEventListener("change", function () {
+      var id = select.getAttribute("data-channel");
+      if (SOURCES.indexOf(select.value) === -1) return;
+      config.inputs[id].source = select.value;
+      persist(id);
+    });
+  });
+
+  document.querySelectorAll("[data-key='waiting']").forEach(function (select) {
+    select.addEventListener("change", function () {
+      var id = select.getAttribute("data-channel");
+      if (WAITING.indexOf(select.value) === -1) return;
+      config.inputs[id].waiting = select.value;
+      persist(id);
+    });
+  });
+
+  document.querySelectorAll("[data-key='loop']").forEach(function (input) {
     input.addEventListener("change", function () {
       var id = input.getAttribute("data-channel");
-      var device = input.value.trim();
-      if (!device || device.length > 128 || /[\r\n]/.test(device)) {
-        fieldError(id, "DeckLink input needs the device name ffmpeg lists.");
+      var loop = input.value.trim();
+      if (loop.length > 500 || /[\r\n]/.test(loop)) {
+        fieldError(id, "Loop file is a path on this encoder, 500 characters or fewer.");
         setSaved(id, false);
-        input.value = config.inputs[id].device;
+        input.value = config.inputs[id].loop;
         return;
       }
-      config.inputs[id].device = device;
-      input.value = device;
+      config.inputs[id].loop = loop;
+      input.value = loop;
       persist(id);
+    });
+  });
+
+  CHANNELS.forEach(function (id) {
+    var button = document.getElementById("bars-" + id);
+    if (!button) return;
+    button.addEventListener("click", function () {
+      var enabled = !bars[id];
+      fetch("/api/channels/" + id + "/bars", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Requested-With": "NexEncoder"
+        },
+        body: JSON.stringify({ enabled: enabled })
+      }).then(function (response) {
+        if (!response.ok) throw new Error("bars");
+        return response.json();
+      }).then(function (body) {
+        bars[id] = !!(body && body.enabled);
+        var note = document.getElementById("bars-note-" + id);
+        if (note) {
+          note.hidden = false;
+          note.textContent = bars[id] ? "Bars with ident are on the output." : "Bars with ident are off.";
+        }
+        paint();
+      }).catch(function () {
+        fieldError(id, "Bars with ident did not change.");
+      });
     });
   });
 
@@ -295,21 +378,11 @@
   }).then(function (body) {
     if (dirty || !body || !body.config) return;
     config = normalize(body.config);
+    if (body.bars) {
+      bars.A = !!body.bars.A;
+      bars.B = !!body.bars.B;
+    }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
     paint();
   }).catch(function () {});
-
-  var deviceList = document.getElementById("devices");
-  if (deviceList) {
-    fetch("/api/devices").then(function (response) {
-      if (!response.ok) throw new Error("devices");
-      return response.json();
-    }).then(function (body) {
-      (body.devices || []).forEach(function (device) {
-        var option = document.createElement("option");
-        option.value = device.name;
-        deviceList.appendChild(option);
-      });
-    }).catch(function () {});
-  }
 })();

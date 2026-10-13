@@ -6,12 +6,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "web"
-PAGES = ("index.html", "inputs.html", "outputs.html", "monitor.html", "metrics.html", "services.html")
+PAGES = ("index.html", "inputs.html", "outputs.html", "monitor.html", "effects.html", "metrics.html", "services.html")
 PAGE_SCRIPTS = {
     "index.html": ["assets/theme.js", "assets/console.js"],
     "inputs.html": ["assets/theme.js", "assets/console.js"],
     "outputs.html": ["assets/theme.js", "assets/console.js"],
     "monitor.html": ["assets/theme.js", "assets/console.js", "assets/preview.js"],
+    "effects.html": ["assets/theme.js", "assets/console.js", "assets/effects.js"],
     "metrics.html": ["assets/theme.js", "assets/console.js", "assets/metrics.js"],
     "services.html": ["assets/theme.js", "assets/console.js", "assets/services.js"],
 }
@@ -70,6 +71,7 @@ def test_pages_share_the_nexapp_shell():
         assert "assets/encoder.css" in parser.links
         assert parser.scripts == PAGE_SCRIPTS[name]
         assert 'href="metrics.html"' in text and 'href="services.html"' in text
+        assert 'href="effects.html"' in text
         for class_name in SHELL:
             assert class_name in parser.classes
         assert parser.active_hrefs == [name]

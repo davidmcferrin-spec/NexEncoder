@@ -1,7 +1,7 @@
 """Pull CEA-708 CDPs and SCTE-104 messages out of a VANC byte buffer.
 
-The capture process hands the ANC payload here. CDP bytes start with 0x96 0x69.
-SCTE-104 multiple_operation_message bytes start with 0xFFFF. Each hit is parsed
+The DeckLink demuxer forwards ANC user data here: a CDP starts with 0x96 0x69
+and a SCTE-104 multiple_operation_message starts with 0xFFFF. Each hit is parsed
 with the production parsers; a bad packet is skipped so one corrupt line does
 not drop the rest of the frame.
 """

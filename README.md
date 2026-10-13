@@ -3,7 +3,7 @@
 Two-input HD-SDI to SRT/HLS encoder for a Dell R4xx server (R440 realistic minimum) with a
 Blackmagic DeckLink Duo / Duo 2.
 
-- Inputs: 2 independent HD-SDI (1080i / 720p) with CEA-608/708 captions and SCTE-104
+- Inputs: 2 channels, each SDI or an SRT listener (1080i / 1080p / 720p). SDI carries CEA-608/708 and SCTE-104
 - Outputs per input: SRT (caller or listener) or HLS (push or pull), H.264 6-18 Mbps + AAC stereo
 - Captions: 708 re-embedded as A/53 SEI; 608 carried inside the 708 CDP
 - SCTE: 104 translated to SCTE-35 splice_info_section, muxed on a data PID
@@ -17,8 +17,10 @@ No Node. No Docker. Runs on the host under systemd (Ubuntu 24.04 LTS).
 
 Ubuntu 24.04 LTS. Packages come from APT (no pip, no venv): Python, GStreamer,
 Prometheus, and node_exporter. `setup.sh` downloads FFmpeg 9.0.2 and builds it into
-`/usr/local` with DeckLink, libx264, and libopus. That build needs the Desktop Video
-headers in `/opt/decklink-sdk`. It also installs a pinned MediaMTX v1.21.1 binary,
+`/usr/local` with DeckLink (`--enable-nonfree`), OpenSSL (`--enable-version3`), libx264,
+and libopus. The build patches the DeckLink demuxer so caption CDPs and SCTE-104 ride a
+localhost UDP feed to the channel supervisor, which inserts SCTE-35. That build needs the
+Desktop Video headers in `/opt/decklink-sdk`. It also installs a pinned MediaMTX v1.21.1 binary,
 `nexencoder-console.service`, and the `nexencoder-channel@` template. TSDuck and the
 Desktop Video driver are checked for and not downloaded. Channel units stay stopped
 until you start them. A crashed channel, console, or MediaMTX is restarted with no
@@ -45,9 +47,31 @@ progress file is updating. Services can start, stop, restart, enable, and disabl
 allowlisted units, including `mediamtx` and `nexencoder-channel@A` / `@B`.
 
 The monitor page plays each input from MediaMTX at `http://<host>:8889/inputA/whep` and
-`inputB`. Caption and splice notes show up when something posts them to `/api/sideband`.
+`inputB`. The channel posts caption and splice notes to `/api/sideband` as VANC arrives.
 `POST /api/channels/A/scte` translates a SCTE-104 message and sends the SCTE-35 section to
-the channel's spliceinject port.
+the channel's spliceinject port. The program leaves spliceinject on `127.0.0.1:19001` (A)
+and `:19002` (B).
+
+The Effects page grabs a clean still of the selected input every 8 seconds, so a squeeze
+and its CG layers can be lined up on the real picture and saved as a preset. Corner
+positions are fractions of the frame, so a preset recalled on 720p, 1080i, or 1080p
+lands on the same part of the picture.
+`POST /api/channels/A/effects/recall` applies a preset on the running filter graph.
+`POST /api/channels/A/effects/normalize` returns that input to full raster and clears the
+CG. Neither call restarts the channel. CEA-608/708 stay on the primary frame as A/53 SEI,
+and SCTE-104 still arrives as VANC datagrams and leaves as SCTE-35. A CG layer is an HTML
+URL (WPE, or Chromium if WPE is not installed) or the shared SDI fill/key pair on
+DeckLink Duo 2 (3) and (4). Each layer takes a level from −4 to +4; 0 is the video.
+A channel holds at most four layers, and two layers cannot share a level.
+
+Input A is DeckLink Duo 2 (1) or an SRT listener on port 9001. Input B is DeckLink Duo 2 (2)
+or port 9002. Output B's listener defaults to port 9101 so it does not take an input port.
+Layer −5 is a waiting picture (a slate, a 10–30 second loop, or color bars) and stays on
+the output when SDI unlocks or the SRT caller drops. The encode keeps running.
+`POST /api/channels/A/bars` with `{"enabled": true}` puts SMPTE bars and an ident
+(host address and input number) on layer +5 without restarting the channel. While bars
+are the picture, the output audio is a 1 kHz tone. Captions and SCTE are not required
+in that mode, and an SRT input has no VANC.
 
 ## Modules (`nexencoder/`)
 
@@ -65,10 +89,16 @@ the channel's spliceinject port.
 | `inject.py` | SCTE-104 injector: scenarios to SCTE-35 TS file plus JSON log, with self-check |
 | `metrics.py` | Prometheus exposition for input and output state |
 | `console.py` | Operator console, `/metrics`, config, preview, Prometheus proxy, service control |
-| `signal.py` | 1080i / 720p rasters and DeckLink format codes |
+| `signal.py` | 1080i / 1080p / 720p rasters and DeckLink format codes |
 | `decklink.py` | ffmpeg device-list and status JSON parsers |
 | `vanc.py` | Scan a VANC buffer for CEA-708 CDPs and SCTE-104 |
+| `vanc_feed.py` | VANC datagrams to SCTE-35 and monitor notes |
+| `decklink_patch.py` | Insert the VANC forwarder into the FFmpeg 9.0.2 DeckLink demuxer |
 | `pipeline.py` | ffmpeg capture, tsp spliceinject, SRT, and HLS argv |
+| `livefeed.py` | SRT ingest, waiting-loop feeder, and the DeckLink signal flag |
+| `effects.py` | Squeeze quads, CG layers, presets, recall and normalize |
+| `cgfeed.py` | HTML and SDI fill/key feeders for the CG slots |
+| `effect_patch.py` | Install the `nexeffect` filter into the FFmpeg 9.0.2 build |
 | `channels.py` | Saved channel config and the metrics snapshot it produces |
 | `channel.py` | One-channel supervisor: capture, spliceinject, egress |
 | `status.py` | ffmpeg progress file used for live bitrate and signal |
@@ -78,8 +108,12 @@ the channel's spliceinject port.
 ## Target hardware
 
 - **Host:** Dell R440 or newer (realistic floor; R415 is too slow for two 1080i x264 encodes),
-  or a Minisforum MS-01 (i5-12600H is enough for two channels; i9-13900H for headroom or four).
-  The MS-01 has one half-height PCIe 4.0 x16 slot (x8 speed), so it needs a low-profile card.
+  or a Minisforum MS-01. For encode only, the i5-12600H is enough for two channels.
+  With the squeeze and HTML CG layers, use the i9-13900H and 64 GB. One or two
+  simple HTML layers fit. Four animated HTML layers on both channels at once
+  needs a larger host. The MS-01 has one half-height PCIe 4.0 x16 slot (x8 speed),
+  so it needs a low-profile card. On a Duo 2 Mini the four connectors are two program
+  inputs plus one shared fill/key pair.
 - **Capture card (per owner, both have a reference input and support 1080i59.94):**
   DeckLink Duo 2 Mini (PCIe 2.0 x4, enough for two HD inputs) or DeckLink 8K Pro Mini
   (PCIe 3.0 x8, 12G-SDI, room for four channels or 4K later). Full-height cards do not fit the MS-01.
@@ -95,8 +129,10 @@ the channel's spliceinject port.
 - [x] Phase 3: H.264/AAC, tsp SCTE-35 insert, SRT caller/listener, HLS push/pull, channel supervisor
 - [x] Phase 4: MediaMTX preview (RTSP publish, WHEP on the monitor page) and caption/SCTE sideband. The operator console uses the NexApp theme.
 - [x] Phase 5: `nexencoder-console`, `nexencoder-channel@`, and `mediamtx` units; `setup.sh` installs ffmpeg, GStreamer, Prometheus, and MediaMTX
+- [x] Phase 6: four-corner squeeze, up to four CG layers (HTML or one SDI fill/key), effect builder, preset recall and normalize
+- [x] Phase 7: SDI or SRT listener per input, waiting picture on layer −5, bars and ident on layer +5, fractional presets, 1080p
 
-Live proof still open: a DeckLink signal, a real VANC capture, TSDuck `tstables` on a generated section, and a CPU benchmark of two 1080i encodes.
+Live proof still open: a DeckLink signal, a real VANC capture, TSDuck `tstables` on a generated section, a CPU benchmark of two 1080i encodes, and a live recall of a squeeze plus an HTML layer on the MS-01.
 
 ## SCTE-104 injector
 

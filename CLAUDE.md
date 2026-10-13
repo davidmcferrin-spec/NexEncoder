@@ -1,7 +1,7 @@
 # NexEncoder: project notes for Claude
 
 ## Purpose
-Two independent HD-SDI inputs (1080i / 720p) on a Blackmagic DeckLink Duo or Duo 2,
+Two inputs, each SDI or an SRT listener (1080i / 1080p / 720p), on a Blackmagic DeckLink Duo or Duo 2,
 hosted in a Dell R415/R430/R440/R450 (R440 is the realistic minimum). Each input is
 encoded to H.264/AAC and delivered as SRT (caller or listener) or HLS (push or pull).
 CEA-608/708 captions and SCTE-104 are carried through (708 as A/53 SEI, 104 translated
@@ -16,13 +16,20 @@ to SCTE-35) and shown on a low-latency WebRTC proxy preview via MediaMTX.
 
 ## Stack
 - Capture: FFmpeg DeckLink, one process per input (`yuv422p10` so VANC becomes A/53 side data).
-  `nexencoder.vanc` scans ANC bytes for CEA-708 CDPs and SCTE-104. A DeckLink SDK process can
-  replace the ffmpeg input later; the argv and the scanner are what run now.
+ `setup.sh` patches that demuxer to UDP the CEA-708 CDP and SCTE-104 user data to the channel
+ supervisor. `nexencoder.vanc` scans those bytes; SCTE-104 is translated and sent to spliceinject.
 - Encode/mux: FFmpeg libx264 (6–18 Mbps) and AAC, TSDuck `spliceinject` for SCTE-35, then
   `tsp` SRT or FFmpeg HLS. GStreamer is installed for the host; the live path is ffmpeg | tsp.
 - Control plane: `python3 -m nexencoder.console` (stdlib HTTP, vanilla JS). Caption and splice
   notes are posted to `/api/sideband` and the monitor page polls them. Config is saved by the
-  console and applied by restarting `nexencoder-channel@A` / `@B`.
+  console and applied by restarting `nexencoder-channel@A` / `@B`. Effect recall, normalize,
+  and bars-with-ident do not restart the channel. Input A is DeckLink Duo 2 (1) or SRT
+  listener port 9001; input B is DeckLink Duo 2 (2) or port 9002. Output B listens on 9101.
+  Layer −5 is the waiting picture. Layer +5 is bars plus an ident. A tone replaces audio
+  while bars are the picture. Preset corners are fractions of the frame.
+  Up to four CG layers each take a level from −4 to +4; 0 is the video. HTML is painted by
+  WPE or Chromium. One SDI fill/key pair, DeckLink inputs 3 and 4, is shared. 608/708 stay A/53 side data on the
+  primary frame. SCTE-104 still leaves the demuxer as UDP and returns as SCTE-35. SRT inputs have no VANC.
 - Packages: APT only (Ubuntu 24.04 LTS), plus a pinned FFmpeg 9.0.2 built with DeckLink
   and the pinned MediaMTX binary. No pip, no venv. TSDuck and Desktop Video are checked
   for, not downloaded. Channel units restart forever; a stalled frame count restarts the pipeline.
