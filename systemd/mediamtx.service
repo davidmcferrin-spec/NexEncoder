@@ -1,0 +1,14 @@
+[Unit]
+Description=NexEncoder MediaMTX preview
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mediamtx /etc/nexencoder/mediamtx.yml
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

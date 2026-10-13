@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en" data-theme-pref="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inputs · NexEncoder</title>
+  <script>
+    (function(){try{var p=localStorage.getItem('nexapp-theme')||'system';
+      var d=p==='dark'||(p==='system'&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';
+      document.documentElement.setAttribute('data-theme',d);
+      document.documentElement.setAttribute('data-theme-pref',p);
+    }catch(e){}})();
+  </script>
+  <link rel="stylesheet" href="assets/app.css">
+  <link rel="stylesheet" href="assets/encoder.css">
+</head>
+<body class="page-shell">
+  <header class="shell-top">
+    <a class="shell-brand" href="index.html">NexEncoder</a>
+    <div class="shell-top-actions">
+      <button type="button" class="btn-text" id="theme-toggle" title="Theme">Theme</button>
+    </div>
+  </header>
+  <aside class="shell-sidebar">
+    <div class="side-profile">
+      <span class="avatar avatar-fallback">E</span>
+      <div class="side-profile-text">
+        <strong>Local console</strong>
+        <span>Operator</span>
+      </div>
+    </div>
+    <nav class="side-nav" aria-label="Primary">
+      <a href="index.html"><span class="nav-ico">▦</span>Dashboard</a>
+      <a class="is-active" href="inputs.html"><span class="nav-ico">▤</span>Inputs</a>
+      <a href="outputs.html"><span class="nav-ico">↗</span>Outputs</a>
+      <a href="monitor.html"><span class="nav-ico">◉</span>Monitor</a>
+      <a href="metrics.html"><span class="nav-ico">◇</span>Metrics</a>
+      <a href="services.html"><span class="nav-ico">⚙</span>Services</a>
+    </nav>
+    <div class="side-foot">HD-SDI · SRT / HLS</div>
+  </aside>
+  <main class="shell-main">
+    <div class="page-head">
+      <div>
+        <h1>Inputs</h1>
+        <p class="lead">Two independent HD-SDI inputs. Captions and SCTE-104 ride the same signal.</p>
+      </div>
+    </div>
+    <form id="config-form" class="grid-2">
+      <section class="panel">
+        <h2>Input A</h2>
+        <p class="muted">SDI 1 · CEA-608/708 · SCTE-104</p>
+        <label for="format-A">Raster</label>
+        <select id="format-A" data-channel="A" data-key="format">
+          <option value="1080i59.94">1080i 59.94</option>
+          <option value="1080i50">1080i 50</option>
+          <option value="720p59.94">720p 59.94</option>
+          <option value="720p50">720p 50</option>
+        </select>
+        <label for="device-A">DeckLink input</label>
+        <input id="device-A" data-channel="A" data-key="device" list="devices" type="text" autocomplete="off" spellcheck="false">
+        <p class="save-row">
+          <span class="ok" id="saved-A" hidden>Saved. Restart the channel service to apply it.</span>
+          <span class="error" id="error-A" role="alert" hidden></span>
+        </p>
+      </section>
+      <section class="panel">
+        <h2>Input B</h2>
+        <p class="muted">SDI 2 · CEA-608/708 · SCTE-104</p>
+        <label for="format-B">Raster</label>
+        <select id="format-B" data-channel="B" data-key="format">
+          <option value="1080i59.94">1080i 59.94</option>
+          <option value="1080i50">1080i 50</option>
+          <option value="720p59.94">720p 59.94</option>
+          <option value="720p50">720p 50</option>
+        </select>
+        <label for="device-B">DeckLink input</label>
+        <input id="device-B" data-channel="B" data-key="device" list="devices" type="text" autocomplete="off" spellcheck="false">
+        <datalist id="devices"></datalist>
+        <p class="save-row">
+          <span class="ok" id="saved-B" hidden>Saved. Restart the channel service to apply it.</span>
+          <span class="error" id="error-B" role="alert" hidden></span>
+        </p>
+      </section>
+    </form>
+  </main>
+  <footer class="shell-footer">
+    <span>NexEncoder</span>
+    <span class="footer-version">v0.1.0</span>
+  </footer>
+  <script src="assets/theme.js"></script>
+  <script src="assets/console.js"></script>
+</body>
+</html>

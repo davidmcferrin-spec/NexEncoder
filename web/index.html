@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en" data-theme-pref="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard · NexEncoder</title>
+  <script>
+    (function(){try{var p=localStorage.getItem('nexapp-theme')||'system';
+      var d=p==='dark'||(p==='system'&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';
+      document.documentElement.setAttribute('data-theme',d);
+      document.documentElement.setAttribute('data-theme-pref',p);
+    }catch(e){}})();
+  </script>
+  <link rel="stylesheet" href="assets/app.css">
+  <link rel="stylesheet" href="assets/encoder.css">
+</head>
+<body class="page-shell">
+  <header class="shell-top">
+    <a class="shell-brand" href="index.html">NexEncoder</a>
+    <div class="shell-top-actions">
+      <button type="button" class="btn-text" id="theme-toggle" title="Theme">Theme</button>
+    </div>
+  </header>
+  <aside class="shell-sidebar">
+    <div class="side-profile">
+      <span class="avatar avatar-fallback">E</span>
+      <div class="side-profile-text">
+        <strong>Local console</strong>
+        <span>Operator</span>
+      </div>
+    </div>
+    <nav class="side-nav" aria-label="Primary">
+      <a class="is-active" href="index.html"><span class="nav-ico">▦</span>Dashboard</a>
+      <a href="inputs.html"><span class="nav-ico">▤</span>Inputs</a>
+      <a href="outputs.html"><span class="nav-ico">↗</span>Outputs</a>
+      <a href="monitor.html"><span class="nav-ico">◉</span>Monitor</a>
+      <a href="metrics.html"><span class="nav-ico">◇</span>Metrics</a>
+      <a href="services.html"><span class="nav-ico">⚙</span>Services</a>
+    </nav>
+    <div class="side-foot">HD-SDI · SRT / HLS</div>
+  </aside>
+  <main class="shell-main">
+    <div class="portal-hero">
+      <h1>NexEncoder</h1>
+      <p>Two HD-SDI inputs, encoded to H.264 and AAC, delivered as SRT or HLS.</p>
+    </div>
+    <div class="banner">Settings are stored on this host. Restart the channel service after a change so capture and delivery pick them up.</div>
+    <div class="grid-stats">
+      <div class="stat"><div class="n">2</div><div class="l">Inputs</div></div>
+      <div class="stat"><div class="n">0</div><div class="l">Outputs running</div></div>
+      <div class="stat"><div class="n">—</div><div class="l">Caption events</div></div>
+      <div class="stat"><div class="n">—</div><div class="l">Splice events</div></div>
+    </div>
+    <div class="widget-strip" style="margin-top:1.25rem">
+      <article class="widget" data-channel-summary="A">
+        <h3>Input A</h3>
+        <span class="badge">Idle</span>
+        <dl class="channel-meta">
+          <div><dt>Raster</dt><dd data-field="format">1080i 59.94</dd></div>
+          <div><dt>Delivery</dt><dd data-field="output">SRT listener · port 9000</dd></div>
+          <div><dt>Video</dt><dd data-field="bitrate">8 Mbps</dd></div>
+        </dl>
+      </article>
+      <article class="widget" data-channel-summary="B">
+        <h3>Input B</h3>
+        <span class="badge">Idle</span>
+        <dl class="channel-meta">
+          <div><dt>Raster</dt><dd data-field="format">1080i 59.94</dd></div>
+          <div><dt>Delivery</dt><dd data-field="output">SRT listener · port 9001</dd></div>
+          <div><dt>Video</dt><dd data-field="bitrate">8 Mbps</dd></div>
+        </dl>
+      </article>
+    </div>
+  </main>
+  <footer class="shell-footer">
+    <span>NexEncoder</span>
+    <span class="footer-version">v0.1.0</span>
+  </footer>
+  <script src="assets/theme.js"></script>
+  <script src="assets/console.js"></script>
+</body>
+</html>

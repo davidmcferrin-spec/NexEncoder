@@ -1,0 +1,180 @@
+/* NexEncoder pages on the NexApp shell. Color and type come from --nx-* tokens. */
+
+.channel-meta {
+  display: grid;
+  margin: 0.75rem 0 0;
+}
+.channel-meta div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--nx-line);
+}
+.channel-meta div:last-child { border-bottom: none; }
+.channel-meta dt {
+  margin: 0;
+  color: var(--nx-muted);
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+.channel-meta dd {
+  margin: 0;
+  font-weight: 600;
+  text-align: right;
+}
+
+.preview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+.preview-frame {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 1px solid var(--nx-line);
+  border-radius: var(--nx-radius);
+  background:
+    radial-gradient(ellipse 70% 80% at 50% 40%, rgba(62, 207, 142, 0.1), transparent 60%),
+    #0b0f14;
+  color: #9aa8b5;
+}
+.preview-frame video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+.preview-wait { font-size: 0.92rem; }
+.preview-frame:has(video:not([hidden])) .preview-wait { display: none; }
+.preview-caption {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  padding: 0.45rem 0.75rem;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-family: var(--nx-mono);
+  font-size: 0.85rem;
+  text-align: center;
+}
+.preview-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.65rem;
+  color: var(--nx-muted);
+  font-size: 0.82rem;
+}
+
+.field-block { margin-bottom: 0.9rem; }
+.field-block[hidden] { display: none !important; }
+.panel .grid-2 { margin-bottom: 0.9rem; }
+.panel .grid-2 input,
+.panel .grid-2 select,
+.field-block input,
+.field-block select { margin-bottom: 0; }
+.save-row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  min-height: 1.4rem;
+  margin: 0.75rem 0 0;
+}
+.save-row .ok,
+.save-row .error { margin: 0; }
+
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+.chart-card h2 {
+  margin: 0 0 0.35rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--nx-muted);
+}
+.chart-value {
+  font-family: var(--nx-mono);
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  margin-bottom: 0.35rem;
+}
+.chart-card canvas,
+#explorer-chart {
+  width: 100%;
+  height: 120px;
+  display: block;
+  border-radius: 8px;
+}
+.chart-note { margin: 0.45rem 0 0; font-size: 0.78rem; }
+.series-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  max-height: 220px;
+  overflow: auto;
+  margin-bottom: 0.85rem;
+}
+[data-theme="light"] button:disabled,
+[data-theme="dark"] button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+[data-theme="light"] button.unit-row,
+[data-theme="dark"] button.unit-row,
+button.unit-row {
+  background: var(--nx-surface);
+  color: var(--nx-ink);
+  border: 1px solid var(--nx-line);
+}
+[data-theme="light"] button.unit-row.is-selected,
+[data-theme="dark"] button.unit-row.is-selected,
+button.unit-row.is-selected,
+[data-theme="light"] .series-list button.is-selected,
+[data-theme="dark"] .series-list button.is-selected {
+  border-color: var(--nx-accent);
+  background: var(--nx-accent-soft);
+  color: var(--nx-ink);
+}
+.ops-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+.unit-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  margin-bottom: 0.45rem;
+  padding: 0.7rem 0.8rem;
+  text-align: left;
+  background: var(--nx-surface);
+  color: var(--nx-ink);
+  border: 1px solid var(--nx-line);
+  border-radius: 8px;
+  font: inherit;
+  cursor: pointer;
+}
+.unit-row strong,
+.unit-row .muted { display: block; }
+.unit-row .badge { align-self: center; }
+#journal { min-height: 320px; max-height: 520px; }
+
+#sideband-log { white-space: pre-wrap; }
+
+@media (max-width: 900px) {
+  .preview-grid { grid-template-columns: 1fr; }
+  .ops-layout { grid-template-columns: 1fr; }
+}

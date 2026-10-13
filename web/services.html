@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en" data-theme-pref="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Services · NexEncoder</title>
+  <script>
+    (function(){try{var p=localStorage.getItem('nexapp-theme')||'system';
+      var d=p==='dark'||(p==='system'&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';
+      document.documentElement.setAttribute('data-theme',d);
+      document.documentElement.setAttribute('data-theme-pref',p);
+    }catch(e){}})();
+  </script>
+  <link rel="stylesheet" href="assets/app.css">
+  <link rel="stylesheet" href="assets/encoder.css">
+</head>
+<body class="page-shell">
+  <header class="shell-top">
+    <a class="shell-brand" href="index.html">NexEncoder</a>
+    <div class="shell-top-actions">
+      <button type="button" class="btn-text" id="theme-toggle" title="Theme">Theme</button>
+    </div>
+  </header>
+  <aside class="shell-sidebar">
+    <div class="side-profile">
+      <span class="avatar avatar-fallback">E</span>
+      <div class="side-profile-text">
+        <strong>Local console</strong>
+        <span>Operator</span>
+      </div>
+    </div>
+    <nav class="side-nav" aria-label="Primary">
+      <a href="index.html"><span class="nav-ico">▦</span>Dashboard</a>
+      <a href="inputs.html"><span class="nav-ico">▤</span>Inputs</a>
+      <a href="outputs.html"><span class="nav-ico">↗</span>Outputs</a>
+      <a href="monitor.html"><span class="nav-ico">◉</span>Monitor</a>
+      <a href="metrics.html"><span class="nav-ico">◇</span>Metrics</a>
+      <a class="is-active" href="services.html"><span class="nav-ico">⚙</span>Services</a>
+    </nav>
+    <div class="side-foot">HD-SDI · SRT / HLS</div>
+  </aside>
+  <main class="shell-main">
+    <div class="page-head">
+      <div>
+        <h1>Services</h1>
+        <p class="lead">Start, stop, restart, enable, and disable the encoder units. The journal follows the selected unit.</p>
+      </div>
+    </div>
+    <div class="banner" id="svc-banner" hidden></div>
+    <div class="ops-layout">
+      <section class="panel">
+        <h2>Units</h2>
+        <div id="unit-list"></div>
+      </section>
+      <section class="panel">
+        <h2 id="journal-title">Journal</h2>
+        <div class="actions">
+          <button type="button" class="btn btn-secondary" data-action="start">Start</button>
+          <button type="button" class="btn btn-danger" data-action="stop">Stop</button>
+          <button type="button" class="btn" data-action="restart">Restart</button>
+          <button type="button" class="btn btn-secondary" data-action="enable">Enable</button>
+          <button type="button" class="btn btn-secondary" data-action="disable">Disable</button>
+          <span id="action-status" class="muted"></span>
+        </div>
+        <div class="log-box" id="journal" role="log" aria-live="polite"></div>
+      </section>
+    </div>
+  </main>
+  <footer class="shell-footer">
+    <span>NexEncoder</span>
+    <span class="footer-version">v0.1.0</span>
+  </footer>
+  <script src="assets/theme.js"></script>
+  <script src="assets/console.js"></script>
+  <script src="assets/services.js"></script>
+</body>
+</html>

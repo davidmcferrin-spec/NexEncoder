@@ -1,0 +1,21 @@
+[Unit]
+Description=NexEncoder channel %i
+After=network-online.target mediamtx.service
+Wants=network-online.target mediamtx.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=90
+WorkingDirectory=@ROOT@
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m nexencoder.channel --id %i --config /var/lib/nexencoder/config.json --hls /var/lib/nexencoder/hls --state /var/lib/nexencoder/state
+Restart=always
+RestartSec=2
+RestartPreventExitStatus=78
+LimitNOFILE=65536
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

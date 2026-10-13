@@ -1,0 +1,189 @@
+/**
+ * NexApp shared design kit — load from Alias apps for a cohesive look.
+ *   <link rel="stylesheet" href="/assets/nexapp-theme.css">
+ *   <script src="/assets/theme.js" defer></script>
+ * Set theme: <html data-theme="light|dark"> or data-theme="system" (JS resolves).
+ */
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+  --nx-bg: #f3f4f6;
+  --nx-surface: #ffffff;
+  --nx-surface-2: #f9fafb;
+  --nx-ink: #111827;
+  --nx-muted: #6b7280;
+  --nx-line: #e5e7eb;
+  --nx-accent: #2563eb;
+  --nx-accent-hover: #1d4ed8;
+  --nx-accent-soft: #eff6ff;
+  --nx-ok: #067647;
+  --nx-warn: #b54708;
+  --nx-danger: #b42318;
+  --nx-hero-from: #0b3a5c;
+  --nx-hero-to: #1a6b9a;
+  --nx-tile-shadow: 0 1px 2px rgba(17, 24, 39, 0.06), 0 4px 12px rgba(17, 24, 39, 0.04);
+  --nx-font: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", sans-serif;
+  --nx-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  --nx-radius: 10px;
+  --nx-sidebar: #ffffff;
+  --nx-sidebar-border: #e5e7eb;
+  --nx-rail-active: #2563eb;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --nx-bg: #0b0f14;
+  --nx-surface: #151b23;
+  --nx-surface-2: #1a222c;
+  --nx-ink: #e8eef4;
+  --nx-muted: #9aa8b5;
+  --nx-line: #2a3542;
+  --nx-accent: #3ecf8e;
+  --nx-accent-hover: #2fb87a;
+  --nx-accent-soft: rgba(62, 207, 142, 0.12);
+  --nx-ok: #3ecf8e;
+  --nx-warn: #f5a524;
+  --nx-danger: #f87171;
+  --nx-hero-from: #061018;
+  --nx-hero-to: #0d2838;
+  --nx-tile-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --nx-sidebar: #0f1419;
+  --nx-sidebar-border: #1e2834;
+  --nx-rail-active: #3ecf8e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --nx-bg: #0b0f14;
+    --nx-surface: #151b23;
+    --nx-surface-2: #1a222c;
+    --nx-ink: #e8eef4;
+    --nx-muted: #9aa8b5;
+    --nx-line: #2a3542;
+    --nx-accent: #3ecf8e;
+    --nx-accent-hover: #2fb87a;
+    --nx-accent-soft: rgba(62, 207, 142, 0.12);
+    --nx-ok: #3ecf8e;
+    --nx-warn: #f5a524;
+    --nx-danger: #f87171;
+    --nx-hero-from: #061018;
+    --nx-hero-to: #0d2838;
+    --nx-tile-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --nx-sidebar: #0f1419;
+    --nx-sidebar-border: #1e2834;
+    --nx-rail-active: #3ecf8e;
+  }
+}
+
+.nx-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.5rem 0.95rem;
+  border: none;
+  border-radius: 6px;
+  background: var(--nx-accent);
+  color: #fff;
+  font: 600 0.9rem var(--nx-font);
+  cursor: pointer;
+  text-decoration: none;
+}
+[data-theme="dark"] .nx-btn,
+:root:not([data-theme="light"]) .nx-btn {
+  color: #04140c;
+}
+[data-theme="light"] .nx-btn { color: #fff; }
+
+.nx-btn:hover { background: var(--nx-accent-hover); text-decoration: none; }
+.nx-btn-ghost,
+[data-theme="dark"] .nx-btn-ghost,
+[data-theme="light"] .nx-btn-ghost,
+:root:not([data-theme="light"]) .nx-btn-ghost {
+  background: transparent;
+  color: var(--nx-ink);
+  border: 1px solid var(--nx-line);
+}
+.nx-btn-ghost:hover,
+[data-theme="dark"] .nx-btn-ghost:hover,
+[data-theme="light"] .nx-btn-ghost:hover {
+  background: var(--nx-surface-2);
+  color: var(--nx-ink);
+}
+
+.nx-app-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  aspect-ratio: 1;
+  padding: 1rem 0.75rem 0.9rem;
+  background: var(--nx-surface);
+  border: 1px solid var(--nx-line);
+  border-radius: var(--nx-radius);
+  box-shadow: var(--nx-tile-shadow);
+  color: var(--nx-ink);
+  text-decoration: none;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.nx-app-tile:hover {
+  border-color: var(--nx-accent);
+  transform: translateY(-2px);
+  text-decoration: none;
+  color: var(--nx-ink);
+}
+.nx-app-tile__icon {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56%;
+  max-width: 72px;
+}
+.nx-app-tile__icon img,
+.nx-app-tile__icon svg {
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+}
+.nx-app-tile__name {
+  font-size: 0.82rem;
+  font-weight: 500;
+  text-align: center;
+  line-height: 1.25;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nx-app-tile__menu {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.35rem;
+  border: none;
+  background: transparent;
+  color: var(--nx-muted);
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 4px;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+.nx-app-tile__menu:hover { background: var(--nx-accent-soft); color: var(--nx-ink); }
+
+.nx-badge {
+  display: inline-block;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--nx-surface-2);
+  color: var(--nx-muted);
+}
+.nx-badge-ok { background: color-mix(in srgb, var(--nx-ok) 18%, transparent); color: var(--nx-ok); }
+.nx-badge-bad { background: color-mix(in srgb, var(--nx-danger) 18%, transparent); color: var(--nx-danger); }

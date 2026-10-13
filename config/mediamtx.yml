@@ -1,0 +1,14 @@
+# NexEncoder preview broker. ffmpeg publishes RTSP on localhost.
+# The monitor page plays WebRTC (WHEP) from webrtcAddress.
+logLevel: info
+rtsp: true
+rtspAddress: 127.0.0.1:8554
+rtmp: false
+hls: false
+webrtc: true
+webrtcAddress: :8889
+api: false
+
+paths:
+  inputA:
+  inputB:

@@ -1,0 +1,10 @@
+{
+  "inputs": {
+    "A": {"format": "1080i59.94", "device": "DeckLink Duo 2 (1)"},
+    "B": {"format": "1080i59.94", "device": "DeckLink Duo 2 (2)"}
+  },
+  "outputs": {
+    "A": {"mode": "srt-listener", "bitrate": 8, "host": "", "port": 9000, "url": ""},
+    "B": {"mode": "srt-listener", "bitrate": 8, "host": "", "port": 9001, "url": ""}
+  }
+}

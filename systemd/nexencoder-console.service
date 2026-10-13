@@ -1,0 +1,15 @@
+[Unit]
+Description=NexEncoder operator console and metrics
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT@
+ExecStart=/usr/bin/python3 -m nexencoder.console --host 127.0.0.1 --port 8788 --web web --config /var/lib/nexencoder/config.json --state /var/lib/nexencoder/state
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
