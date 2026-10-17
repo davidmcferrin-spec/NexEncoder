@@ -3,9 +3,9 @@
 #
 # Packages come from APT only: no pip, no venv, no Node, no containers.
 # Installs Python, GStreamer, the local Prometheus stack, a pinned MediaMTX
-# binary, and the console plus channel units. FFmpeg 9.0.2 is downloaded and
-# built with DeckLink (--enable-nonfree), OpenSSL (--enable-version3), libx264,
-# and libopus. The DeckLink demuxer is patched to forward VANC captions and
+# binary, the console, the channel units, and the token-authenticated NOC agent.
+# FFmpeg 9.0.2 is downloaded and built with DeckLink (--enable-nonfree), OpenSSL
+# (--enable-version3), libx264, and libopus. The DeckLink demuxer is patched to forward VANC captions and
 # SCTE-104 to the channel supervisor. The nexeffect filter is added for the
 # four-corner squeeze and CG stack. TSDuck and Desktop Video are checked
 # for, not downloaded (Desktop Video needs a Blackmagic login).
@@ -161,6 +161,59 @@ install_ffmpeg() {
   log "installed ${bin} ($("$bin" -version | head -n 1))"
 }
 
+install_noc_agent() {
+  if ! id nexencoder >/dev/null 2>&1; then
+    $SUDO useradd --system --home-dir /var/lib/nexencoder --shell /usr/sbin/nologin --comment "NexEncoder NOC agent" nexencoder
+    log "created system user nexencoder"
+  fi
+  for group in systemd-journal video render; do
+    if getent group "$group" >/dev/null 2>&1; then
+      $SUDO usermod -aG "$group" nexencoder || log "WARNING: could not add nexencoder to ${group}"
+    fi
+  done
+  $SUDO mkdir -p /etc/nexencoder /var/lib/nexencoder/hls /var/lib/nexencoder/state /etc/polkit-1/rules.d /etc/sudoers.d
+  $SUDO chmod 0755 /var/lib/nexencoder /var/lib/nexencoder/hls /var/lib/nexencoder/state
+  if [ ! -f /etc/nexencoder/noc.json ]; then
+    $SUDO cp config/noc.json /etc/nexencoder/noc.json
+    $SUDO chmod 0644 /etc/nexencoder/noc.json
+    log "installed /etc/nexencoder/noc.json"
+  fi
+  if [ ! -s /etc/nexencoder/noc.token ]; then
+    token="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    printf '%s\n' "$token" | $SUDO tee /etc/nexencoder/noc.token >/dev/null
+    unset token
+    log "generated /etc/nexencoder/noc.token"
+  fi
+  $SUDO chown root:nexencoder /etc/nexencoder/noc.token
+  $SUDO chmod 0640 /etc/nexencoder/noc.token
+  $SUDO cp config/nexencoder-noc.rules /etc/polkit-1/rules.d/50-nexencoder-noc.rules
+  $SUDO chmod 0644 /etc/polkit-1/rules.d/50-nexencoder-noc.rules
+  sudoers_tmp="$(mktemp)"
+  cp config/sudoers-nexencoder-noc "$sudoers_tmp"
+  if command -v visudo >/dev/null 2>&1; then
+    visudo -cf "$sudoers_tmp"
+  fi
+  $SUDO cp "$sudoers_tmp" /etc/sudoers.d/nexencoder-noc
+  $SUDO chmod 0440 /etc/sudoers.d/nexencoder-noc
+  rm -f "$sudoers_tmp"
+  $SUDO chmod -R a+rX nexencoder
+  unit_tmp="$(mktemp)"
+  sed "s|@ROOT@|$(pwd)|g" systemd/nexencoder-noc.service > "$unit_tmp"
+  $SUDO cp "$unit_tmp" /etc/systemd/system/nexencoder-noc.service
+  rm -f "$unit_tmp"
+  if command -v systemctl >/dev/null 2>&1; then
+    $SUDO systemctl daemon-reload
+    $SUDO systemctl enable nexencoder-noc
+    $SUDO systemctl restart nexencoder-noc || log "WARNING: could not start nexencoder-noc (the nexencoder user must be able to read this tree and the token file)"
+  fi
+  if ! $SUDO -u nexencoder python3 -c 'import nexencoder' >/dev/null 2>&1; then
+    log "WARNING: user nexencoder cannot import nexencoder from $(pwd). Make this directory executable by that user and restart nexencoder-noc."
+  fi
+  log "NOC agent is nexencoder-noc on port 8790. Token file is /etc/nexencoder/noc.token (mode 640, group nexencoder)."
+  log "Set encoder_id, site, location, and allow in /etc/nexencoder/noc.json, then restart nexencoder-noc."
+  log "Rotate the token by replacing /etc/nexencoder/noc.token and restarting nexencoder-noc. Do not print the token."
+}
+
 if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt-get >/dev/null 2>&1; then
   sdk_ok=0
   for dir in /opt/decklink-sdk /usr/include; do
@@ -276,6 +329,7 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
     fi
   fi
   log "channel units are installed. Start them with: systemctl start nexencoder-channel@A nexencoder-channel@B"
+  install_noc_agent
 fi
 
 log "running test suite"

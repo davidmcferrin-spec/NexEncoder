@@ -20,7 +20,7 @@ to SCTE-35) and shown on a low-latency WebRTC proxy preview via MediaMTX.
  supervisor. `nexencoder.vanc` scans those bytes; SCTE-104 is translated and sent to spliceinject.
 - Encode/mux: FFmpeg libx264 (6–18 Mbps) and AAC, TSDuck `spliceinject` for SCTE-35, then
   `tsp` SRT or FFmpeg HLS. GStreamer is installed for the host; the live path is ffmpeg | tsp.
-- Control plane: `python3 -m nexencoder.console` (stdlib HTTP, vanilla JS). Caption and splice
+- Control plane: `python3 -m nexencoder.console` (stdlib HTTP, vanilla JS). The console has no login and stays on loopback. `python3 -m nexencoder.noc` is a separate bearer-token API for NexNOC (`/api/noc/v1`, contract in `docs/NOC-AGENT-API.md`). Caption and splice
   notes are posted to `/api/sideband` and the monitor page polls them. Config is saved by the
   console and applied by restarting `nexencoder-channel@A` / `@B`. Effect recall, normalize,
   and bars-with-ident do not restart the channel. Input A is DeckLink Duo 2 (1) or SRT

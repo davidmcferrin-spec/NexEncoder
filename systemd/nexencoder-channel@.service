@@ -10,6 +10,8 @@ NotifyAccess=main
 WatchdogSec=90
 WorkingDirectory=@ROOT@
 Environment=PYTHONUNBUFFERED=1
+# Progress and SRT stats must stay readable by the nexencoder user.
+UMask=0022
 ExecStart=/usr/bin/python3 -m nexencoder.channel --id %i --config /var/lib/nexencoder/config.json --hls /var/lib/nexencoder/hls --state /var/lib/nexencoder/state
 Restart=always
 RestartSec=2

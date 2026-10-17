@@ -18,7 +18,7 @@ def _fields(name: str) -> dict[str, str]:
 
 
 def test_services_retry_forever():
-    for name in ("nexencoder-console.service", "mediamtx.service", "nexencoder-channel@.service"):
+    for name in ("nexencoder-console.service", "mediamtx.service", "nexencoder-channel@.service", "nexencoder-noc.service"):
         fields = _fields(name)
         assert fields["Restart"] == "always"
         assert fields["StartLimitIntervalSec"] == "0"
