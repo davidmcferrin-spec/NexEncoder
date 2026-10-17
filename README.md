@@ -21,7 +21,8 @@ Prometheus, and node_exporter. `setup.sh` downloads FFmpeg 9.0.2 and builds it i
 and libopus. The build patches the DeckLink demuxer so caption CDPs and SCTE-104 ride a
 localhost UDP feed to the channel supervisor, which inserts SCTE-35. That build needs the
 Desktop Video headers in `/opt/decklink-sdk`. It also installs a pinned MediaMTX v1.21.1 binary,
-`nexencoder-console.service`, and the `nexencoder-channel@` template. TSDuck and the
+`nexencoder-console.service`, the `nexencoder-channel@` template, and
+`nexencoder-noc.service`. TSDuck and the
 Desktop Video driver are checked for and not downloaded. Channel units stay stopped
 until you start them. A crashed channel, console, or MediaMTX is restarted with no
 start limit. A channel whose frame count stops moving is restarted by its supervisor.
@@ -74,6 +75,20 @@ the output when SDI unlocks or the SRT caller drops. The encode keeps running.
 are the picture, the output audio is a 1 kHz tone. Captions and SCTE are not required
 in that mode, and an SRT input has no VANC.
 
+## NOC agent
+
+NexNOC polls a separate process, `python3 -m nexencoder.noc`. It is not the operator
+console. The console stays on `127.0.0.1:8788` with no login. The agent listens on
+`0.0.0.0:8790` (override in `/etc/nexencoder/noc.json`) and requires a bearer token
+from `/etc/nexencoder/noc.token`. The contract, example payloads, TLS, and the
+install and token-rotation steps are in [docs/NOC-AGENT-API.md](docs/NOC-AGENT-API.md).
+
+`setup.sh` creates the `nexencoder` system user, the token file (mode 640), a polkit
+rule, and a sudoers drop-in that can start, stop, and restart only
+`nexencoder-channel@A` and `@B`.
+Re-run `./setup.sh` on an existing host to install the agent. It does not replace an
+existing token or `noc.json`.
+
 ## Modules (`nexencoder/`)
 
 | Module | Purpose |
@@ -90,6 +105,9 @@ in that mode, and an SRT input has no VANC.
 | `inject.py` | SCTE-104 injector: scenarios to SCTE-35 TS file plus JSON log, with self-check |
 | `metrics.py` | Prometheus exposition for input and output state |
 | `console.py` | Operator console, `/metrics`, config, preview, Prometheus proxy, service control |
+| `noc.py` | Token-authenticated NOC agent (`/api/noc/v1`) |
+| `hoststats.py` | CPU, memory, disk, NIC, temperature, and GPU samples for the agent |
+| `srtstats.py` | TSDuck SRT statistics probe and parser |
 | `signal.py` | 1080i / 1080p / 720p rasters and DeckLink format codes |
 | `decklink.py` | ffmpeg device-list and status JSON parsers |
 | `vanc.py` | Scan a VANC buffer for CEA-708 CDPs and SCTE-104 |
@@ -132,6 +150,7 @@ in that mode, and an SRT input has no VANC.
 - [x] Phase 5: `nexencoder-console`, `nexencoder-channel@`, and `mediamtx` units; `setup.sh` installs ffmpeg, GStreamer, Prometheus, and MediaMTX
 - [x] Phase 6: four-corner squeeze, up to four CG layers (HTML or one SDI fill/key), effect builder, preset recall and normalize
 - [x] Phase 7: SDI or SRT listener per input, waiting picture on layer −5, bars and ident on layer +5, fractional presets, 1080p
+- [x] NOC agent: `/api/noc/v1` identity, host metrics, per-output status, and start/stop/restart. See `docs/NOC-AGENT-API.md`.
 
 Live proof still open: a DeckLink signal, a real VANC capture, TSDuck `tstables` on a generated section, a CPU benchmark of two 1080i encodes, and a live recall of a squeeze plus an HTML layer on the MS-01.
 

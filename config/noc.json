@@ -1,0 +1,19 @@
+{
+  "encoder_id": "",
+  "site": "",
+  "location": "",
+  "listen": "0.0.0.0",
+  "port": 8790,
+  "allow": [],
+  "preview_host": "",
+  "preview_port": 8889,
+  "preview_scheme": "http",
+  "tls_cert": "",
+  "tls_key": "",
+  "token_file": "/etc/nexencoder/noc.token",
+  "use_sudo": false,
+  "trust_proxy": false,
+  "hls_root": "/var/lib/nexencoder/hls",
+  "encoder_config": "/var/lib/nexencoder/config.json",
+  "state_dir": "/var/lib/nexencoder/state"
+}

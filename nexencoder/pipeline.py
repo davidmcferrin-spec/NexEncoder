@@ -7,6 +7,8 @@ that ffmpeg writes to its stdout. Argv builders do not spawn processes.
 
 from __future__ import annotations
 
+import ipaddress
+
 from .effects import STILL_SECONDS, escape_filter_value
 from .signal import SignalMode, h264_level, lavfi_rate, signal_mode
 
@@ -18,6 +20,16 @@ FEED_ADDR = "127.0.0.1"
 SCTE_PID = 0x1F0
 PREVIEW_SIZE = "960:540"
 PREVIEW_RTSP = "rtsp://127.0.0.1:8554"
+# Program audio is AAC. The preview path uses Opus and is not this rate.
+AUDIO_BITRATE = "192k"
+AUDIO_BITRATE_BPS = 192_000
+AUDIO_CHANNELS = 2
+AUDIO_RATE_HZ = 48000
+SRT_LATENCY_MS = 1500
+# TSDuck treats this as a minimum. Stats are logged only while packets flow.
+SRT_STATS_INTERVAL_MS = 5000
+SRT_STATS_PREFIX = "nexencoder-srt"
+HLS_SEGMENT_SECONDS = 2
 
 
 def preview_path(channel_id: str) -> str:
@@ -29,7 +41,13 @@ def preview_rtsp(channel_id: str) -> str:
 
 
 def whep_url(channel_id: str, host: str = "127.0.0.1", port: int = 8889) -> str:
-    return f"http://{host}:{port}/{preview_path(channel_id)}/whep"
+    shown = host
+    try:
+        if isinstance(ipaddress.ip_address(host), ipaddress.IPv6Address):
+            shown = f"[{host}]"
+    except ValueError:
+        pass
+    return f"http://{shown}:{port}/{preview_path(channel_id)}/whep"
 
 
 def _video_args(mode: SignalMode, bitrate_mbps: int) -> list[str]:
@@ -51,7 +69,7 @@ def _video_args(mode: SignalMode, bitrate_mbps: int) -> list[str]:
         args += ["-flags", "+ildct+ilme", "-x264-params", "tff=1"]
     elif mode.field == "bff":
         args += ["-flags", "+ildct+ilme", "-x264-params", "bff=1"]
-    args += ["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"]
+    args += ["-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", str(AUDIO_RATE_HZ), "-ac", str(AUDIO_CHANNELS)]
     return args
 
 
@@ -224,14 +242,26 @@ def splice_argv(channel_id: str, tsp: str = "tsp") -> list[str]:
     ]
 
 
-def srt_argv(channel_id: str, mode: str, host: str, port: int, tsp: str = "tsp") -> list[str]:
+def srt_argv(
+    channel_id: str,
+    mode: str,
+    host: str,
+    port: int,
+    tsp: str = "tsp",
+    statistics: bool = True,
+) -> list[str]:
+    """SRT egress via TSDuck. GStreamer is not on this path.
+
+    Statistics flags are omitted when the installed tsp has no ``--json-line``
+    support. The channel supervisor decides that; the builder itself stays pure.
+    """
     feed = FEED_PORT[channel_id]
     argv = [
         tsp,
         "-I", "ip", f"{FEED_ADDR}:{feed}",
         "--local-address", FEED_ADDR,
         "-O", "srt",
-        "--latency", "1500",
+        "--latency", str(SRT_LATENCY_MS),
         "--transtype", "live",
     ]
     if mode == "srt-listener":
@@ -242,6 +272,11 @@ def srt_argv(channel_id: str, mode: str, host: str, port: int, tsp: str = "tsp")
         argv += ["--caller", f"{host}:{int(port)}"]
     else:
         raise ValueError(f"{mode} is not an SRT delivery")
+    if statistics:
+        argv += [
+            "--statistics-interval", str(SRT_STATS_INTERVAL_MS),
+            f"--json-line={SRT_STATS_PREFIX}",
+        ]
     return argv
 
 
@@ -259,7 +294,7 @@ def hls_argv(
         "-f", "mpegts", "-i", src,
         "-map", "0", "-c", "copy", "-copyts",
         "-f", "hls",
-        "-hls_time", "2",
+        "-hls_time", str(HLS_SEGMENT_SECONDS),
         "-hls_list_size", "10",
         "-hls_flags", "delete_segments+append_list+independent_segments+program_date_time",
         "-hls_segment_type", "mpegts",
@@ -298,7 +333,8 @@ def egress_argv(
     publish_dir: str,
     ffmpeg: str = "ffmpeg",
     tsp: str = "tsp",
+    srt_statistics: bool = True,
 ) -> list[str]:
     if mode.startswith("srt-"):
-        return srt_argv(channel_id, mode, host, port, tsp)
+        return srt_argv(channel_id, mode, host, port, tsp, statistics=srt_statistics)
     return hls_argv(channel_id, mode, url, publish_dir, ffmpeg)

@@ -1,0 +1,20 @@
+// Let the nexencoder user start, stop, and restart the two channel units.
+// No other unit and no other verb is granted.
+polkit.addRule(function(action, subject) {
+    if (subject.user != "nexencoder") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    if (action.id != "org.freedesktop.systemd1.manage-units") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var verb = action.lookup("verb");
+    if (verb != "start" && verb != "stop" && verb != "restart") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var unit = action.lookup("unit");
+    if (unit == "nexencoder-channel@A.service" || unit == "nexencoder-channel@A" ||
+        unit == "nexencoder-channel@B.service" || unit == "nexencoder-channel@B") {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

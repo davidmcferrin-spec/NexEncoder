@@ -8,6 +8,8 @@ from nexencoder import scte104 as s104
 from nexencoder.channel import EXIT_CONFIG, progress_target, run_channel
 from nexencoder.channels import save_config
 from nexencoder.pipeline import (
+    SRT_STATS_INTERVAL_MS,
+    SRT_STATS_PREFIX,
     capture_argv,
     clock_argv,
     egress_argv,
@@ -70,6 +72,10 @@ def test_splice_and_srt_listener():
     assert "496/0x86" in splice
     listener = egress_argv("A", "srt-listener", "", 9000, "", "/tmp/hls")
     assert listener[listener.index("--listener") + 1] == ":9000"
+    assert listener[listener.index("--statistics-interval") + 1] == str(SRT_STATS_INTERVAL_MS)
+    assert f"--json-line={SRT_STATS_PREFIX}" in listener
+    quiet = egress_argv("A", "srt-listener", "", 9000, "", "/tmp/hls", srt_statistics=False)
+    assert "--json-line" not in " ".join(quiet)
     caller = egress_argv("B", "srt-caller", "origin.example", 9001, "", "/tmp/hls")
     assert caller[caller.index("--caller") + 1] == "origin.example:9001"
     with pytest.raises(ValueError):

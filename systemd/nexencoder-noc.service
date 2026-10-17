@@ -1,0 +1,20 @@
+[Unit]
+Description=NexEncoder NOC agent
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=nexencoder
+Group=nexencoder
+WorkingDirectory=@ROOT@
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m nexencoder.noc --config /etc/nexencoder/noc.json
+Restart=always
+RestartSec=2
+RestartPreventExitStatus=78
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

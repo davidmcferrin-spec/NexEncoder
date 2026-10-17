@@ -1,0 +1,8 @@
+# NexEncoder NOC agent fallback. Used only when noc.json sets "use_sudo": true.
+# Passwordless systemctl for the two channel units. Nothing else.
+nexencoder ALL=(root) NOPASSWD: /usr/bin/systemctl start nexencoder-channel@A.service
+nexencoder ALL=(root) NOPASSWD: /usr/bin/systemctl stop nexencoder-channel@A.service
+nexencoder ALL=(root) NOPASSWD: /usr/bin/systemctl restart nexencoder-channel@A.service
+nexencoder ALL=(root) NOPASSWD: /usr/bin/systemctl start nexencoder-channel@B.service
+nexencoder ALL=(root) NOPASSWD: /usr/bin/systemctl stop nexencoder-channel@B.service
+nexencoder ALL=(root) NOPASSWD: /usr/bin/systemctl restart nexencoder-channel@B.service

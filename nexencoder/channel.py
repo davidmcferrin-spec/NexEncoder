@@ -46,6 +46,7 @@ from .livefeed import (
 )
 from .pipeline import VANC_PORT, capture_argv, clock_argv, egress_argv, splice_argv
 from .signal import signal_mode
+from .srtstats import atomic_json, redact_secrets, start_srt_stats_reader, tsp_supports_srt_stats
 from .status import parse_ffmpeg_progress, progress_frame
 from .vanc_feed import start_vanc_thread
 
@@ -58,7 +59,7 @@ BACKOFF_CAP = 30.0
 
 
 def _spawn(argv: list[str], **kwargs) -> subprocess.Popen:
-    log.info("start %s", " ".join(argv))
+    log.info("start %s", redact_secrets(" ".join(argv)))
     return subprocess.Popen(argv, **kwargs)
 
 
@@ -148,6 +149,29 @@ def _running(proc: subprocess.Popen | None) -> bool:
     return proc is not None and proc.poll() is None
 
 
+def note_fault(state_dir: Path | None, channel_id: str, message: str) -> None:
+    """Remember the latest pipeline fault for the NOC agent."""
+    if state_dir is None:
+        return
+    text = " ".join(message.split())[:500]
+    atomic_json(state_dir / f"{channel_id}.error", {"message": text, "unix": time.time()})
+
+
+def note_runs(state_dir: Path | None, channel_id: str, runs: int) -> None:
+    """How many times this process has spawned the encode pipeline."""
+    if state_dir is None:
+        return
+    path = state_dir / f"{channel_id}.runs"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(f"{int(runs)}\n", encoding="utf-8")
+    tmp.replace(path)
+    try:
+        path.chmod(0o644)
+    except OSError:
+        pass
+
+
 def run_channel(
     channel_id: str,
     config_path: Path,
@@ -166,6 +190,7 @@ def run_channel(
     vanc_listen: bool = False,
     manage_effects: bool = False,
     manage_live: bool = False,
+    srt_statistics: bool | None = None,
 ) -> int:
     config = load_config(config_path)
     spec_in = config["inputs"][channel_id]
@@ -215,6 +240,9 @@ def run_channel(
                 hold_path=hold_file, pcm_path=pcm_file,
             )
         splice = splice_argv(channel_id)
+        stats_on = False
+        if spec_out["mode"].startswith("srt-"):
+            stats_on = tsp_supports_srt_stats() if srt_statistics is None else bool(srt_statistics)
         egress = egress_argv(
             channel_id,
             spec_out["mode"],
@@ -222,9 +250,11 @@ def run_channel(
             spec_out["port"],
             spec_out["url"],
             str(publish),
+            srt_statistics=stats_on,
         )
     except ValueError as exc:
         log.error("%s", exc)
+        note_fault(state_dir, channel_id, str(exc))
         return EXIT_CONFIG
 
     children: list[subprocess.Popen] = []
@@ -305,8 +335,11 @@ def run_channel(
                     daemon=True,
                 ).start()
             # Bind the program reader before spliceinject starts sending.
-            out = spawn(egress)
+            srt_pipe = subprocess.PIPE if stats_on and state_dir is not None else None
+            out = spawn(egress, stderr=srt_pipe)
             started.append(out)
+            if srt_pipe is not None and state_dir is not None:
+                start_srt_stats_reader(out, state_dir / f"{channel_id}.srt.json")
             tsp = spawn(splice, stdin=ffmpeg.stdout)
             started.append(tsp)
             splice_proc[0] = tsp
@@ -314,6 +347,7 @@ def run_channel(
                 ffmpeg.stdout.close()
         except OSError as exc:
             log.error("channel %s failed to start: %s", channel_id, exc)
+            note_fault(state_dir, channel_id, f"failed to start: {exc}")
             splice_proc[0] = None
             _stop_children(started, pause)
             notify("WATCHDOG=1\n")
@@ -322,6 +356,7 @@ def run_channel(
             continue
         children[:] = started
         ran += 1
+        note_runs(state_dir, channel_id, ran)
         opened = clock()
         last_frame = 0
         last_advance = opened
@@ -343,6 +378,12 @@ def run_channel(
         if stopping or (cycles is not None and ran >= cycles):
             break
         reason = "stalled" if stalled else "exited"
+        if stalled:
+            fault = f"pipeline stalled at frame {last_frame}"
+        else:
+            codes = [proc.poll() for proc in children]
+            fault = f"pipeline exited codes={codes}"
+        note_fault(state_dir, channel_id, fault)
         log.warning("channel %s pipeline %s; restarting in %ss", channel_id, reason, delay)
         notify("WATCHDOG=1\n")
         pause(delay)
