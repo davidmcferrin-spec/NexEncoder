@@ -119,6 +119,10 @@ def test_filter_patch_registers_nexeffect_and_copies_side_data(tmp_path):
     makefile = patch_makefile("OBJS-$(CONFIG_COPY_FILTER) += vf_copy.o\n")
     assert "CONFIG_NEXEFFECT_FILTER" in makefile
     assert patch_makefile(makefile) == makefile
+    padded = "OBJS-$(CONFIG_COPY_FILTER)                   += vf_copy.o\n"
+    aligned = patch_makefile(padded)
+    assert aligned.startswith(padded)
+    assert "CONFIG_NEXTONE_FILTER" in aligned
     filters = patch_allfilters("extern const FFFilter ff_vf_perspective;\n")
     assert "ff_vf_nexeffect" in filters
     assert "ff_af_nextone" in filters

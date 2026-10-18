@@ -7,10 +7,12 @@ order stay in the repo, not only inside a downloaded tree.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 MARKER = "nexencoder effect stack"
-MAKE_ANCHOR = "OBJS-$(CONFIG_COPY_FILTER) += vf_copy.o\n"
+# FFmpeg 9.0.2 pads the += column, so the gap is not a single space.
+MAKE_ANCHOR = re.compile(r"^OBJS-\$\(CONFIG_COPY_FILTER\)[ \t]+\+=[ \t]+vf_copy\.o\n", re.MULTILINE)
 MAKE_LINE = (
     "OBJS-$(CONFIG_NEXEFFECT_FILTER) += vf_nexeffect.o\n"
     "OBJS-$(CONFIG_NEXTONE_FILTER) += af_nextone.o\n"
@@ -30,9 +32,10 @@ def tone_source() -> str:
 def patch_makefile(text: str) -> str:
     if "CONFIG_NEXEFFECT_FILTER" in text:
         return text
-    if MAKE_ANCHOR not in text:
+    match = MAKE_ANCHOR.search(text)
+    if match is None:
         raise ValueError("libavfilter Makefile has no copy filter anchor")
-    return text.replace(MAKE_ANCHOR, MAKE_ANCHOR + MAKE_LINE, 1)
+    return text[: match.end()] + MAKE_LINE + text[match.end() :]
 
 
 def patch_allfilters(text: str) -> str:
