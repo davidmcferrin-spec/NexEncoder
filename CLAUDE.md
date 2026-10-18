@@ -31,8 +31,9 @@ to SCTE-35) and shown on a low-latency WebRTC proxy preview via MediaMTX.
   WPE or Chromium with alpha kept. An NDI source can occupy a layer when ndisrc is installed.
   One SDI fill/key pair, DeckLink inputs 3 and 4, is shared. 608/708 stay A/53 side data on the
   primary frame. SCTE-104 still leaves the demuxer as UDP and returns as SCTE-35. SRT inputs have no VANC.
-- Packages: APT only (Ubuntu 24.04 LTS), plus a pinned FFmpeg 9.0.2 built with DeckLink
-  and the pinned MediaMTX binary. No pip, no venv. TSDuck is checked for, not downloaded.
+- Packages: APT only (Ubuntu 24.04 LTS), plus a pinned FFmpeg 9.0.2 built with DeckLink,
+  pinned TSDuck 3.45-4798, and the pinned MediaMTX binary. No pip, no venv. TSDuck is
+  downloaded from the official release when `tsp` is not already on PATH.
   Desktop Video and the DeckLink SDK are installed from archives in `/home/nexstar`, not downloaded. Channel units restart forever; a stalled frame count restarts the pipeline.
 - Preview: MediaMTX. ffmpeg publishes RTSP to `127.0.0.1:8554`; the monitor page plays WHEP.
 

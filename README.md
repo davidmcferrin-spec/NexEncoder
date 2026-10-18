@@ -23,9 +23,10 @@ localhost UDP feed to the channel supervisor, which inserts SCTE-35. `setup.sh` 
 the DeckLink SDK from `Blackmagic_DeckLink_SDK_*.zip` in `/home/nexstar` (or the home
 directory of the user who ran sudo) into `/opt/decklink-sdk`, and installs the
 `desktopvideo` package from `Blackmagic_Desktop_Video_Linux_*.tar.gz` in that same
-place. Neither archive is downloaded. It also installs a pinned MediaMTX v1.21.1 binary,
-`nexencoder-console.service`, the `nexencoder-channel@` template, and
-`nexencoder-noc.service`. TSDuck is checked for and not downloaded. `setup.sh` enables
+place. Neither archive is downloaded. It also installs pinned TSDuck 3.45-4798
+(the Ubuntu 24.04 package from the official release, skipped when `tsp` is already
+on `PATH`), a pinned MediaMTX v1.21.1 binary, `nexencoder-console.service`, the
+`nexencoder-channel@` template, and `nexencoder-noc.service`. `setup.sh` enables
 and restarts Apache, Prometheus, node_exporter, MediaMTX, the console, the NOC agent,
 and `nexencoder-channel@A` and `@B`. A crashed channel, console, or MediaMTX is restarted
 with no start limit. A channel whose frame count stops moving is restarted by its supervisor.

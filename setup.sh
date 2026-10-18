@@ -8,7 +8,8 @@
 # FFmpeg 9.0.2 is downloaded and built with DeckLink (--enable-nonfree), OpenSSL
 # (--enable-version3), libx264, and libopus. The DeckLink demuxer is patched to forward VANC captions and
 # SCTE-104 to the channel supervisor. The nexeffect filter is added for the
-# four-corner squeeze and CG stack. TSDuck is checked for, not downloaded.
+# four-corner squeeze and CG stack. TSDuck 3.45-4798 is downloaded from the
+# official release and installed when tsp is not already on PATH.
 # Desktop Video and the DeckLink SDK are installed from archives already in
 # /home/nexstar (or the home of the user who started this script). They are
 # not downloaded. Rebuild FFmpeg with NEXENCODER_FORCE_FFMPEG_BUILD=1.
@@ -397,7 +398,26 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
   if command -v tsp >/dev/null 2>&1; then
     log "tsduck is installed ($(tsp --version 2>/dev/null | head -n 1 || true))"
   else
-    log "WARNING: tsp is not on PATH. SCTE-35 insertion needs TSDuck from https://tsduck.io/"
+    tsduck_ver="3.45-4798"
+    tsduck_arch=""
+    case "$(uname -m)" in
+      x86_64|amd64) tsduck_arch=amd64; tsduck_sha=0023689f76e75b64e45253771208bcf8ca95b91fbfd0900da097c729f3c39fde ;;
+      aarch64|arm64) tsduck_arch=arm64; tsduck_sha=332ae85ec2fce378ae9d2ae872606a38192aeb62da6edcf784ce6466b780295f ;;
+    esac
+    if [ -z "$tsduck_arch" ]; then
+      die "no pinned TSDuck build for $(uname -m). SCTE-35 and SRT egress need tsp."
+    fi
+    tsduck_deb="tsduck_${tsduck_ver}.ubuntu24_${tsduck_arch}.deb"
+    tsduck_url="https://github.com/tsduck/tsduck/releases/download/v${tsduck_ver}/${tsduck_deb}"
+    tsduck_tmp="$(mktemp -d)"
+    log "downloading TSDuck ${tsduck_ver} (${tsduck_arch})"
+    curl -fsSL -o "$tsduck_tmp/$tsduck_deb" "$tsduck_url"
+    echo "${tsduck_sha}  $tsduck_tmp/$tsduck_deb" | sha256sum -c -
+    $SUDO apt-get update -qq
+    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$tsduck_tmp/$tsduck_deb"
+    rm -rf "$tsduck_tmp"
+    command -v tsp >/dev/null 2>&1 || die "TSDuck installed but tsp is not on PATH"
+    log "tsduck is installed ($(tsp --version 2>/dev/null | head -n 1 || true))"
   fi
 
   install_decklink

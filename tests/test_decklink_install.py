@@ -76,3 +76,14 @@ def test_setup_installs_local_archives_and_does_not_download_them():
     assert "ufw allow OpenSSH" in script
     assert "ufw allow 80/tcp" in script
     assert "ProxyPass" not in script
+
+
+def test_setup_downloads_pinned_tsduck():
+    script = Path("setup.sh").read_text(encoding="utf-8")
+    assert "https://github.com/tsduck/tsduck/releases/download/v${tsduck_ver}/${tsduck_deb}" in script
+    assert 'tsduck_ver="3.45-4798"' in script
+    assert "tsduck_${tsduck_ver}.ubuntu24_${tsduck_arch}.deb" in script
+    assert "0023689f76e75b64e45253771208bcf8ca95b91fbfd0900da097c729f3c39fde" in script
+    assert "332ae85ec2fce378ae9d2ae872606a38192aeb62da6edcf784ce6466b780295f" in script
+    assert "SCTE-35 insertion needs TSDuck from https://tsduck.io/" not in script
+    assert "TSDuck is checked for, not downloaded" not in script
