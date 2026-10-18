@@ -244,7 +244,7 @@ with brackets. The WHEP port defaults to 8889, which is MediaMTX `webrtcAddress`
         "id": "A",
         "source": "sdi",
         "format": "1080i59.94",
-        "device": "DeckLink Duo 2 (1)",
+        "device": "DeckLink Duo (1)",
         "srt_port": null
       },
       "video": {
@@ -324,7 +324,7 @@ with brackets. The WHEP port defaults to 8889, which is MediaMTX `webrtcAddress`
         "id": "B",
         "source": "sdi",
         "format": "1080i59.94",
-        "device": "DeckLink Duo 2 (2)",
+        "device": "DeckLink Duo (2)",
         "srt_port": null
       },
       "video": {

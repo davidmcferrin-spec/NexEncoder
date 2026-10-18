@@ -23,8 +23,8 @@ to SCTE-35) and shown on a low-latency WebRTC proxy preview via MediaMTX.
 - Control plane: Apache and PHP serve the operator pages on port 80 (no login). `python3 -m nexencoder.console` is the live feed on `127.0.0.1:8788`. PHP calls that feed. Admin saves are PHP scripts. `python3 -m nexencoder.noc` is a separate bearer-token API for NexNOC (`/api/noc/v1`, contract in `docs/NOC-AGENT-API.md`). Caption and splice
   notes are posted to `/api/sideband` and the monitor page polls them. Config is saved through
   PHP and applied by restarting `nexencoder-channel@A` / `@B`. Effect recall, normalize,
-  and bars-with-ident do not restart the channel. Input A is DeckLink Duo 2 (1) or SRT
-  listener port 9001; input B is DeckLink Duo 2 (2) or port 9002. Output B listens on 9101.
+  and bars-with-ident do not restart the channel. Input A is DeckLink Duo (1) or SRT
+  listener port 9001; input B is DeckLink Duo (2) or port 9002. Output B listens on 9101.
   Auto on the Inputs page reads the locked SDI mode, or the SRT caller's stream banner, and saves that raster.
   Layer −5 is the waiting picture. Layer +5 is bars plus an ident. A tone replaces audio
   while bars are the picture. Preset corners are fractions of the frame.

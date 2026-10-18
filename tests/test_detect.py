@@ -18,22 +18,22 @@ def test_geometry_maps_only_the_six_rasters():
 
 
 def test_decklink_banner_and_status_json():
-    found = parse_probe("Found Decklink mode 1920 x 1080 with rate 29.97(i)\n", "DeckLink Duo 2 (1)")
+    found = parse_probe("Found Decklink mode 1920 x 1080 with rate 29.97(i)\n", "DeckLink Duo (1)")
     assert found["ok"] is True and found["format"] == "1080i59.94"
     progressive = parse_probe(
         "Stream #0:0: Video: rawvideo, uyvy422, 1920x1080, 50 fps, 50 tbr\n",
-        "DeckLink Duo 2 (1)",
+        "DeckLink Duo (1)",
     )
     assert progressive["format"] == "1080p50"
-    quiet = parse_probe("No input signal detected\n", "DeckLink Duo 2 (1)")
+    quiet = parse_probe("No input signal detected\n", "DeckLink Duo (1)")
     assert quiet["ok"] is False and quiet["format"] == ""
-    busy = parse_probe("[decklink] Device or resource busy\n", "DeckLink Duo 2 (1)")
+    busy = parse_probe("[decklink] Device or resource busy\n", "DeckLink Duo (1)")
     assert "in use" in busy["detail"]
-    odd = parse_probe("Found Decklink mode 1920 x 1080 with rate 23.98\n", "DeckLink Duo 2 (1)")
+    odd = parse_probe("Found Decklink mode 1920 x 1080 with rate 23.98\n", "DeckLink Duo (1)")
     assert odd["ok"] is False and "not a supported raster" in odd["detail"]
     status = parse_probe(
-        json.dumps({"devices": [{"name": "DeckLink Duo 2 (2)", "input_locked": True, "input_mode": "720p50"}]}),
-        "DeckLink Duo 2 (2)",
+        json.dumps({"devices": [{"name": "DeckLink Duo (2)", "input_locked": True, "input_mode": "720p50"}]}),
+        "DeckLink Duo (2)",
     )
     assert status["format"] == "720p50"
 

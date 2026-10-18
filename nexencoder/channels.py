@@ -18,8 +18,8 @@ INPUT_SRT_PORTS = {"A": 9001, "B": 9002}
 RESERVED_LISTENER_PORTS = frozenset(INPUT_SRT_PORTS.values())
 
 DEFAULT_DEVICES = {
-    "A": "DeckLink Duo 2 (1)",
-    "B": "DeckLink Duo 2 (2)",
+    "A": "DeckLink Duo (1)",
+    "B": "DeckLink Duo (2)",
 }
 
 

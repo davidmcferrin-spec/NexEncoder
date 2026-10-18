@@ -21,11 +21,11 @@ from nexencoder.signal import h264_level, signal_mode
 
 
 def test_capture_keeps_vanc_and_tees_preview():
-    argv = capture_argv("A", "DeckLink Duo 2 (1)", "1080i59.94", 8, progress_path="/run/A.progress")
+    argv = capture_argv("A", "DeckLink Duo (1)", "1080i59.94", 8, progress_path="/run/A.progress")
     assert argv[0] == "ffmpeg"
     assert argv[argv.index("-raw_format") + 1] == "yuv422p10"
     assert argv[argv.index("-format_code") + 1] == "Hi59"
-    assert argv[argv.index("-i") + 1] == "DeckLink Duo 2 (1)"
+    assert argv[argv.index("-i") + 1] == "DeckLink Duo (1)"
     assert argv[argv.index("-a53cc") + 1] == "1"
     assert "pipe:1" in argv
     assert "rtsp://127.0.0.1:8554/inputA" in argv
@@ -42,7 +42,7 @@ def test_capture_keeps_vanc_and_tees_preview():
 
 
 def test_progressive_capture_skips_interlace_flags():
-    argv = capture_argv("B", "DeckLink Duo 2 (2)", "720p59.94", 12)
+    argv = capture_argv("B", "DeckLink Duo (2)", "720p59.94", 12)
     assert argv[argv.index("-format_code") + 1] == "hp59"
     assert "+ildct+ilme" not in argv
     assert "rtsp://127.0.0.1:8554/inputB" in argv
@@ -147,7 +147,7 @@ def test_run_channel_starts_capture_splice_and_egress(tmp_path):
 
 def test_run_channel_refuses_a_caller_with_no_address(tmp_path):
     config = {
-        "inputs": {"A": {"format": "1080i59.94", "device": "DeckLink Duo 2 (1)"}},
+        "inputs": {"A": {"format": "1080i59.94", "device": "DeckLink Duo (1)"}},
         "outputs": {"A": {"mode": "srt-caller", "bitrate": 8, "host": "", "port": 9000, "url": ""}},
     }
     path = tmp_path / "config.json"

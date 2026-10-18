@@ -29,7 +29,7 @@ def test_scan_finds_a_cdp_and_a_splice_around_junk():
 
 def test_normalize_keeps_legal_values_and_drops_the_rest():
     raw = {
-        "inputs": {"A": {"format": "720p50", "device": " DeckLink Duo 2 (1) "}, "C": {"format": "2160p"}},
+        "inputs": {"A": {"format": "720p50", "device": " DeckLink Duo (1) "}, "C": {"format": "2160p"}},
         "outputs": {
             "A": {"mode": "hls-push", "bitrate": 99, "host": "bad host", "port": 0, "url": "ftp://nope"},
             "B": {"mode": "srt-caller", "bitrate": 18, "host": "origin.example", "port": 9001, "url": ""},
@@ -37,7 +37,7 @@ def test_normalize_keeps_legal_values_and_drops_the_rest():
     }
     config = normalize_config(raw)
     assert config["inputs"]["A"]["format"] == "720p50"
-    assert config["inputs"]["A"]["device"] == "DeckLink Duo 2 (1)"
+    assert config["inputs"]["A"]["device"] == "DeckLink Duo (1)"
     assert config["inputs"]["B"]["format"] == "1080i59.94"
     assert config["outputs"]["A"]["bitrate"] == 8
     assert config["outputs"]["A"]["mode"] == "hls-push"

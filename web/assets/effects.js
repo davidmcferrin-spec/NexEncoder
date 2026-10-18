@@ -190,7 +190,7 @@
       } else if (layer.type === "sdi-key") {
         node = document.createElement("div");
         node.className = "sdi-plate";
-        node.textContent = "SDI fill/key \u00b7 DeckLink Duo 2 (3) / (4)";
+        node.textContent = "SDI fill/key \u00b7 DeckLink Duo (3) / (4)";
       } else if (layer.type === "ndi" && layer.name) {
         node = document.createElement("div");
         node.className = "sdi-plate";
@@ -307,7 +307,7 @@
       } else {
         var fixed = document.createElement("p");
         fixed.className = "muted";
-        fixed.textContent = "Fill DeckLink Duo 2 (3), key DeckLink Duo 2 (4).";
+        fixed.textContent = "Fill DeckLink Duo (3), key DeckLink Duo (4).";
         card.appendChild(fixed);
       }
       root.appendChild(card);

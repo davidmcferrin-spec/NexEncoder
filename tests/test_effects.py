@@ -178,7 +178,7 @@ def test_preset_limits_layers_and_raster():
 def test_recall_and_normalize_write_filter_state_without_a_new_pipeline(tmp_path):
     config_path = tmp_path / "config.json"
     save_config(config_path, {
-        "inputs": {"A": {"format": "1080i59.94", "device": "DeckLink Duo 2 (1)"}},
+        "inputs": {"A": {"format": "1080i59.94", "device": "DeckLink Duo (1)"}},
         "outputs": {"A": {"mode": "srt-listener", "bitrate": 8, "host": "", "port": 9000, "url": ""}},
     })
     from nexencoder.channels import load_config

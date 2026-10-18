@@ -51,8 +51,8 @@ def test_key_and_html_argv_do_not_open_the_program_input():
     assert "BGRA" in "".join(html)
     assert "DeckLink" not in " ".join(html)
     key = key_argv("Hi59")
-    assert key[key.index("-i") + 1] == "DeckLink Duo 2 (3)"
-    assert key[key.index("-i", key.index("-i") + 1) + 1] == "DeckLink Duo 2 (4)"
+    assert key[key.index("-i") + 1] == "DeckLink Duo (3)"
+    assert key[key.index("-i", key.index("-i") + 1) + 1] == "DeckLink Duo (4)"
     assert key.count("-i") == 2
     assert "alphamerge" in " ".join(key)
     assert "yuv422p10" not in key

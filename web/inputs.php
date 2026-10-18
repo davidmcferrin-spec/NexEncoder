@@ -55,7 +55,7 @@ header('X-Content-Type-Options: nosniff');
     <form id="config-form" class="grid-2">
       <section class="panel">
         <h2>Input A</h2>
-        <p class="muted" id="endpoint-A">DeckLink Duo 2 (1)</p>
+        <p class="muted" id="endpoint-A">DeckLink Duo (1)</p>
         <label for="source-A">Source</label>
         <select id="source-A" data-channel="A" data-key="source">
           <option value="sdi">SDI</option>
@@ -93,7 +93,7 @@ header('X-Content-Type-Options: nosniff');
       </section>
       <section class="panel">
         <h2>Input B</h2>
-        <p class="muted" id="endpoint-B">DeckLink Duo 2 (2)</p>
+        <p class="muted" id="endpoint-B">DeckLink Duo (2)</p>
         <label for="source-B">Source</label>
         <select id="source-B" data-channel="B" data-key="source">
           <option value="sdi">SDI</option>

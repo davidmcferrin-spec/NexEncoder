@@ -106,12 +106,12 @@ def test_config_preview_and_scte_injection(tmp_path):
     httpd, port = _start(Console(
         config_path=tmp_path / "config.json",
         state_dir=tmp_path / "state",
-        device_lister=lambda: [{"index": 0, "name": "DeckLink Duo 2 (1)"}],
+        device_lister=lambda: [{"index": 0, "name": "DeckLink Duo (1)"}],
         splice_sender=sender,
     ))
     try:
         body = json.dumps({
-            "inputs": {"A": {"format": "720p59.94", "device": "DeckLink Duo 2 (1)"}},
+            "inputs": {"A": {"format": "720p59.94", "device": "DeckLink Duo (1)"}},
             "outputs": {"A": {"mode": "srt-listener", "bitrate": 12, "host": "", "port": 9000, "url": ""}},
         }).encode("utf-8")
         request = Request(
@@ -124,7 +124,7 @@ def test_config_preview_and_scte_injection(tmp_path):
             saved = json.loads(response.read().decode("utf-8"))
         assert saved["config"]["outputs"]["A"]["bitrate"] == 12
         status, listing = _get(port, "/api/devices")
-        assert status == 200 and "DeckLink Duo 2 (1)" in listing
+        assert status == 200 and "DeckLink Duo (1)" in listing
         status, preview = _get(port, "/api/preview")
         assert status == 200 and "/inputA/whep" in preview
         from nexencoder import scte104 as s104
@@ -211,7 +211,7 @@ def test_auto_saves_the_detected_raster_and_leaves_a_miss_alone(tmp_path):
 
     def probe(argv):
         calls.append(argv)
-        if "DeckLink Duo 2 (2)" in argv:
+        if "DeckLink Duo (2)" in argv:
             return "No input signal detected\n"
         return "Found Decklink mode 1280 x 720 with rate 59.94\n"
 

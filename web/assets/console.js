@@ -14,14 +14,14 @@
   var SOURCES = ["sdi", "srt"];
   var WAITING = ["slate", "loop", "bars"];
   var ENDPOINTS = {
-    A: { sdi: "DeckLink Duo 2 (1)", srt: "SRT listener · port 9001" },
-    B: { sdi: "DeckLink Duo 2 (2)", srt: "SRT listener · port 9002" }
+    A: { sdi: "DeckLink Duo (1)", srt: "SRT listener · port 9001" },
+    B: { sdi: "DeckLink Duo (2)", srt: "SRT listener · port 9002" }
   };
   var MODES = ["srt-caller", "srt-listener", "hls-push", "hls-pull"];
   var DEFAULTS = {
     inputs: {
-      A: { format: "1080i59.94", device: "DeckLink Duo 2 (1)", source: "sdi", waiting: "slate", loop: "" },
-      B: { format: "1080i59.94", device: "DeckLink Duo 2 (2)", source: "sdi", waiting: "slate", loop: "" }
+      A: { format: "1080i59.94", device: "DeckLink Duo (1)", source: "sdi", waiting: "slate", loop: "" },
+      B: { format: "1080i59.94", device: "DeckLink Duo (2)", source: "sdi", waiting: "slate", loop: "" }
     },
     outputs: {
       A: { mode: "srt-listener", bitrate: 8, host: "", port: 9000, url: "" },
