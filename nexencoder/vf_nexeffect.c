@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "libavutil/avstring.h"
 #include "libavutil/avutil.h"
 #include "libavutil/common.h"
 #include "libavutil/imgutils.h"
@@ -493,13 +494,13 @@ static void read_hold(NexEffectContext *s)
         while (len && (line[len - 1] == '\n' || line[len - 1] == '\r'))
             line[--len] = 0;
         if (!strncmp(line, "waiting ", 8))
-            snprintf(s->waiting, sizeof s->waiting, "%s", line + 8);
+            av_strlcpy(s->waiting, line + 8, sizeof s->waiting);
         else if (!strncmp(line, "ident ", 6))
-            snprintf(s->ident, sizeof s->ident, "%s", line + 6);
+            av_strlcpy(s->ident, line + 6, sizeof s->ident);
         else if (!strncmp(line, "loop ", 5))
-            snprintf(s->loop_path, sizeof s->loop_path, "%s", line + 5);
+            av_strlcpy(s->loop_path, line + 5, sizeof s->loop_path);
         else if (!strncmp(line, "live ", 5))
-            snprintf(s->live_path, sizeof s->live_path, "%s", line + 5);
+            av_strlcpy(s->live_path, line + 5, sizeof s->live_path);
     }
     fclose(file);
 }
