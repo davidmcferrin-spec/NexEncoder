@@ -408,15 +408,18 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
   $SUDO cp systemd/mediamtx.service /etc/systemd/system/mediamtx.service
   if command -v systemctl >/dev/null 2>&1; then
     $SUDO systemctl daemon-reload
-    $SUDO systemctl enable prometheus prometheus-node-exporter nexencoder-console
+    $SUDO systemctl enable prometheus prometheus-node-exporter nexencoder-console \
+      nexencoder-channel@A nexencoder-channel@B
     $SUDO systemctl restart prometheus prometheus-node-exporter nexencoder-console \
       || log "WARNING: could not start prometheus or the console"
     if [ -x /usr/local/bin/mediamtx ]; then
       $SUDO systemctl enable mediamtx
       $SUDO systemctl restart mediamtx || log "WARNING: could not start mediamtx"
     fi
+    $SUDO systemctl restart nexencoder-channel@A nexencoder-channel@B \
+      || log "WARNING: could not start a channel"
   fi
-  log "channel units are installed. Start them with: systemctl start nexencoder-channel@A nexencoder-channel@B"
+  log "channel units are enabled and restarted"
   install_noc_agent
 fi
 

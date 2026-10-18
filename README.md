@@ -25,12 +25,11 @@ directory of the user who ran sudo) into `/opt/decklink-sdk`, and installs the
 `desktopvideo` package from `Blackmagic_Desktop_Video_Linux_*.tar.gz` in that same
 place. Neither archive is downloaded. It also installs a pinned MediaMTX v1.21.1 binary,
 `nexencoder-console.service`, the `nexencoder-channel@` template, and
-`nexencoder-noc.service`. TSDuck is checked for and not downloaded. Channel units stay stopped
-until you start them. A crashed channel, console, or MediaMTX is restarted with no
-start limit. A channel whose frame count stops moving is restarted by its supervisor.
+`nexencoder-noc.service`. TSDuck is checked for and not downloaded. `setup.sh` enables
+and restarts Apache, Prometheus, node_exporter, MediaMTX, the console, the NOC agent,
+and `nexencoder-channel@A` and `@B`. A crashed channel, console, or MediaMTX is restarted
+with no start limit. A channel whose frame count stops moving is restarted by its supervisor.
 A bad channel config exits 78 and stays stopped until the config is fixed.
-
-    sudo systemctl start nexencoder-channel@A nexencoder-channel@B
 
 ## Tests
 

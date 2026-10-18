@@ -72,3 +72,4 @@ def test_setup_installs_local_archives_and_does_not_download_them():
     assert "nexencoder.decklink_install" in script
     assert "blackmagicdesign.com" not in script
     assert "Desktop Video are checked" not in script
+    assert "systemctl restart nexencoder-channel@A nexencoder-channel@B" in script

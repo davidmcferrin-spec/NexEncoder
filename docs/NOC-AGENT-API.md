@@ -648,11 +648,7 @@ curl -sS -H "Authorization: Bearer $(sudo cat /etc/nexencoder/noc.token)" \
   http://127.0.0.1:8790/api/noc/v1/health
 ```
 
-Channel units are unchanged. Start them the same way as before:
-
-```
-sudo systemctl start nexencoder-channel@A nexencoder-channel@B
-```
+`setup.sh` enables and restarts `nexencoder-channel@A` and `@B` with the other units.
 
 ## What the agent cannot see
 
