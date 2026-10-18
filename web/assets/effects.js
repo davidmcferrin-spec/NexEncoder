@@ -213,7 +213,7 @@
       document.getElementById("still-note").textContent = "No still yet. The channel writes one every 8 seconds once it is running.";
       draw();
     };
-    next.src = "/api/channels/" + channel + "/still?t=" + Date.now();
+    next.src = "/live/still.php?channel=" + channel + "&t=" + Date.now();
   }
 
   function pointFromEvent(event) {
@@ -402,7 +402,7 @@
       recall.textContent = "Recall";
       recall.addEventListener("click", function () {
         loadPreset(preset);
-        post("/api/channels/" + channel + "/effects/recall", { preset: preset.name })
+        post("/admin/recall.php?channel=" + channel, { preset: preset.name })
           .then(function (body) { note(true, recalled(body)); })
           .catch(function (err) { note(false, err.message); });
       });
@@ -430,13 +430,13 @@
     buildCornerInputs();
     buildLayerCards();
     bindCanvas();
-    fetch("/api/config").then(function (response) { return response.json(); }).then(function (body) {
+    fetch("/admin/config.php").then(function (response) { return response.json(); }).then(function (body) {
       applyChannelFormat(body.config || {});
       corners = identity();
       buildCornerInputs();
       draw();
     }).catch(function () { draw(); });
-    fetch("/api/effects/presets").then(function (response) { return response.json(); }).then(function (body) {
+    fetch("/admin/preset.php").then(function (response) { return response.json(); }).then(function (body) {
       renderPresets(body.presets || []);
       if (body.html_renderer === "none") {
         note(false, "No HTML renderer on this host. Squeeze and SDI key still recall; HTML layers stay transparent until WPE or Chromium is installed.");
@@ -444,7 +444,7 @@
     }).catch(function () {});
     document.getElementById("effect-channel").addEventListener("change", function (event) {
       channel = event.target.value;
-      fetch("/api/config").then(function (response) { return response.json(); }).then(function (body) {
+      fetch("/admin/config.php").then(function (response) { return response.json(); }).then(function (body) {
         applyChannelFormat(body.config || {});
         corners = identity();
         buildCornerInputs();
@@ -463,18 +463,18 @@
       body.name = document.getElementById("preset-name").value.trim();
       post("/admin/preset.php", body).then(function () {
         note(true, "Saved " + body.name + ".");
-        return fetch("/api/effects/presets").then(function (response) { return response.json(); });
+        return fetch("/admin/preset.php").then(function (response) { return response.json(); });
       }).then(function (payload) {
         renderPresets(payload.presets || []);
       }).catch(function (err) { note(false, err.message); });
     });
     document.getElementById("recall-effect").addEventListener("click", function () {
-      post("/api/channels/" + channel + "/effects/recall", { effect: effectBody() })
+      post("/admin/recall.php?channel=" + channel, { effect: effectBody() })
         .then(function (body) { note(true, recalled(body)); })
         .catch(function (err) { note(false, err.message); });
     });
     document.getElementById("normalize-effect").addEventListener("click", function () {
-      post("/api/channels/" + channel + "/effects/normalize", { frames: clampFrames("out-frames") })
+      post("/admin/normalize.php?channel=" + channel, { frames: clampFrames("out-frames") })
         .then(function (body) {
           corners = identity();
           layers.forEach(function (layer) { layer.enabled = false; });

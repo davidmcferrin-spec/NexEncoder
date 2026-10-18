@@ -38,10 +38,10 @@ A bad channel config exits 78 and stays stopped until the config is fixed.
 ## Operator console
 
 Apache and PHP serve the pages from `/var/lib/nexencoder/www` (copied from `web/` by
-`setup.sh`) on `http://127.0.0.1:8780/`. The UI uses the NexApp theme kit and shell.
-`python3 -m nexencoder.console` is the live JSON feed on `127.0.0.1:8788`. Apache proxies
-`/api/` and `/metrics` to that feed. Admin saves go through PHP (`/admin/config.php`,
-`/admin/bars.php`, `/admin/service.php`, `/admin/preset.php`), and those scripts call the feed.
+`setup.sh`) on port 80. The UI uses the NexApp theme kit and shell.
+`python3 -m nexencoder.console` is the live feed on `127.0.0.1:8788`. The browser talks
+only to Apache. PHP calls that feed for config, presets, the service list, and the live
+notes, still, log, and metrics. Preview video is WebRTC from MediaMTX, not from Apache.
 
 Raster, DeckLink device, bitrate, and SRT/HLS settings are stored by that config save
 (restart the channel unit to apply them). Metrics charts CPU, memory, disk, GPU, and uptime
@@ -80,7 +80,7 @@ in that mode, and an SRT input has no VANC.
 ## NOC agent
 
 NexNOC polls a separate process, `python3 -m nexencoder.noc`. It is not the operator
-console. The pages stay on `http://127.0.0.1:8780/` with no login. The live feed stays on
+console. The pages are Apache on port 80, with no login. The live feed stays on
 `127.0.0.1:8788`. The agent listens on
 `0.0.0.0:8790` (override in `/etc/nexencoder/noc.json`) and requires a bearer token
 from `/etc/nexencoder/noc.token`. The contract, example payloads, TLS, and the

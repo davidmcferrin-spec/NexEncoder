@@ -258,11 +258,11 @@
 
   function promGet(kind, query) {
     var url = kind === "range"
-      ? "/api/prom/query_range?query=" + encodeURIComponent(query)
+      ? "/live/prom.php?kind=query_range&query=" + encodeURIComponent(query)
         + "&start=" + ((Date.now() - WINDOW_MS) / 1000)
         + "&end=" + (Date.now() / 1000)
         + "&step=15"
-      : "/api/prom/query?query=" + encodeURIComponent(query);
+      : "/live/prom.php?kind=query&query=" + encodeURIComponent(query);
     return fetch(url).then(function (response) { return response.json(); });
   }
 
@@ -408,7 +408,7 @@
   }
 
   function refreshNames(localNames) {
-    fetch("/api/prom/names").then(function (response) { return response.json(); }).then(function (payload) {
+    fetch("/live/prom.php?kind=names").then(function (response) { return response.json(); }).then(function (payload) {
       var remote = payload && payload.status === "success" && Array.isArray(payload.data) ? payload.data : [];
       var merged = {};
       remote.concat(localNames).forEach(function (name) { merged[name] = true; });
@@ -421,7 +421,7 @@
   }
 
   function tick() {
-    fetch("/metrics").then(function (response) { return response.text(); }).then(function (text) {
+    fetch("/live/metrics.php").then(function (response) { return response.text(); }).then(function (text) {
       var samples = parseExposition(text);
       refreshEncoder(samples);
       var localNames = [];
@@ -447,7 +447,7 @@
     if (selectedName) refreshExplorer();
   }
 
-  fetch("/api/catalog").then(function (response) { return response.json(); }).then(function (payload) {
+  fetch("/admin/catalog.php").then(function (response) { return response.json(); }).then(function (payload) {
     cards = payload.cards || [];
     buildCards();
     tick();

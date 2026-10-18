@@ -30,6 +30,113 @@ function nexencoder_admin_request(): string
     return $raw;
 }
 
+function nexencoder_pass(int $status, string $type, string $payload): never
+{
+    if ($status < 100 || $status > 599) {
+        $status = 502;
+    }
+    http_response_code($status);
+    header('Content-Type: ' . $type);
+    header('Cache-Control: no-store');
+    echo $payload;
+    exit;
+}
+
+/**
+ * GET the Python live feed and return [status, content type, body].
+ *
+ * @return array{0:int,1:string,2:string}
+ */
+function nexencoder_get(string $path): array
+{
+    $down = json_encode(['ok' => false, 'detail' => 'The encoder feed is not answering']);
+    $url = NEXENCODER_FEED . $path;
+    if (!function_exists('curl_init')) {
+        return [503, 'application/json; charset=utf-8', $down];
+    }
+    $ch = curl_init($url);
+    if ($ch === false) {
+        return [503, 'application/json; charset=utf-8', $down];
+    }
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 8,
+        CURLOPT_CONNECTTIMEOUT => 2,
+    ]);
+    $payload = curl_exec($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    $type = (string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+    $errno = curl_errno($ch);
+    curl_close($ch);
+    if ($payload === false || $errno !== 0 || $status === 0) {
+        return [503, 'application/json; charset=utf-8', $down];
+    }
+    if ($type === '') {
+        $type = 'application/json; charset=utf-8';
+    }
+    return [$status, $type, $payload];
+}
+
+function nexencoder_get_pass(string $path): never
+{
+    [$status, $type, $payload] = nexencoder_get($path);
+    nexencoder_pass($status, $type, $payload);
+}
+
+function nexencoder_stream(string $path): never
+{
+    $url = NEXENCODER_FEED . $path;
+    $status = 0;
+    $type = 'text/event-stream; charset=utf-8';
+    $started = false;
+    if (function_exists('apache_setenv')) {
+        apache_setenv('no-gzip', '1');
+    }
+    ini_set('zlib.output_compression', '0');
+    ini_set('implicit_flush', '1');
+    while (ob_get_level() > 0) {
+        ob_end_flush();
+    }
+    if (!function_exists('curl_init')) {
+        nexencoder_json(503, ['ok' => false, 'detail' => 'The encoder feed is not answering']);
+    }
+    $ch = curl_init($url);
+    if ($ch === false) {
+        nexencoder_json(503, ['ok' => false, 'detail' => 'The encoder feed is not answering']);
+    }
+    curl_setopt_array($ch, [
+        CURLOPT_HEADERFUNCTION => static function ($ch, string $header) use (&$status, &$type): int {
+            if (preg_match('/^HTTP\/\S+\s+(\d{3})/', $header, $match) === 1) {
+                $status = (int) $match[1];
+            }
+            if (stripos($header, 'Content-Type:') === 0) {
+                $type = trim(substr($header, 13));
+            }
+            return strlen($header);
+        },
+        CURLOPT_WRITEFUNCTION => static function ($ch, string $data) use (&$started, &$status, &$type): int {
+            if (!$started) {
+                $started = true;
+                http_response_code($status > 0 ? $status : 200);
+                header('Content-Type: ' . $type);
+                header('Cache-Control: no-cache');
+                header('X-Accel-Buffering: no');
+            }
+            echo $data;
+            flush();
+            return strlen($data);
+        },
+        CURLOPT_CONNECTTIMEOUT => 2,
+        CURLOPT_TIMEOUT => 0,
+    ]);
+    curl_exec($ch);
+    curl_close($ch);
+    if (!$started) {
+        nexencoder_json(503, ['ok' => false, 'detail' => 'The encoder feed is not answering']);
+    }
+    exit;
+}
+
 function nexencoder_relay(int $status, string $payload): never
 {
     if ($status < 100 || $status > 599) {

@@ -66,7 +66,7 @@ install_operator_pages() {
     $SUDO apt-get update -qq
     $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing[@]}"
   fi
-  $SUDO a2enmod proxy proxy_http rewrite headers >/dev/null
+  $SUDO a2enmod rewrite headers >/dev/null
   phpmod="$(find /etc/apache2/mods-available -maxdepth 1 -name 'php*.load' -printf '%f\n' 2>/dev/null | head -n 1 || true)"
   phpmod="${phpmod%.load}"
   if [ -z "$phpmod" ]; then
@@ -82,13 +82,48 @@ install_operator_pages() {
   $SUDO find /var/lib/nexencoder/www -type f -exec chmod 644 {} +
   $SUDO cp config/apache-nexencoder-listen.conf /etc/apache2/conf-available/nexencoder-listen.conf
   $SUDO cp config/apache-nexencoder.conf /etc/apache2/sites-available/nexencoder.conf
-  $SUDO a2enconf nexencoder-listen >/dev/null
+  $SUDO a2disconf nexencoder-listen >/dev/null 2>&1 || true
+  $SUDO a2dissite 000-default >/dev/null 2>&1 || true
   $SUDO a2ensite nexencoder >/dev/null
   if command -v systemctl >/dev/null 2>&1; then
     $SUDO systemctl enable apache2
     $SUDO systemctl restart apache2 || log "WARNING: could not start Apache"
   fi
-  log "operator pages are http://127.0.0.1:8780/ (Apache and PHP). The live feed stays on 127.0.0.1:8788."
+  log "operator pages are on port 80 (Apache and PHP). The live feed stays on 127.0.0.1:8788."
+}
+
+allow_firewall() {
+  if ! command -v ufw >/dev/null 2>&1; then
+    log "installing ufw"
+    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ufw
+  fi
+  $SUDO ufw allow OpenSSH >/dev/null
+  $SUDO ufw allow 80/tcp >/dev/null
+  $SUDO ufw allow 8889/tcp >/dev/null
+  $SUDO ufw allow 8889/udp >/dev/null
+  $SUDO ufw allow 8790/tcp >/dev/null
+  local ports port
+  ports="$(python3 -c '
+import json
+from pathlib import Path
+from nexencoder.channels import INPUT_SRT_PORTS, normalize_config
+raw = {}
+for path in (Path("/var/lib/nexencoder/config.json"), Path("config/encoder.json")):
+    if path.is_file():
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        break
+cfg = normalize_config(raw if isinstance(raw, dict) else {})
+ports = set(INPUT_SRT_PORTS.values())
+for spec in cfg["outputs"].values():
+    if spec.get("mode") == "srt-listener":
+        ports.add(int(spec["port"]))
+print(" ".join(str(port) for port in sorted(ports)))
+')"
+  for port in $ports; do
+    $SUDO ufw allow "${port}/udp" >/dev/null
+  done
+  $SUDO ufw --force enable >/dev/null
+  log "ufw allows OpenSSH, 80/tcp, 8889, 8790/tcp, and SRT udp ${ports}"
 }
 
 pin_listen() {
@@ -421,6 +456,7 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
   fi
   log "channel units are enabled and restarted"
   install_noc_agent
+  allow_firewall
 fi
 
 log "running test suite"

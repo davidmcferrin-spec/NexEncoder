@@ -73,3 +73,6 @@ def test_setup_installs_local_archives_and_does_not_download_them():
     assert "blackmagicdesign.com" not in script
     assert "Desktop Video are checked" not in script
     assert "systemctl restart nexencoder-channel@A nexencoder-channel@B" in script
+    assert "ufw allow OpenSSH" in script
+    assert "ufw allow 80/tcp" in script
+    assert "ProxyPass" not in script

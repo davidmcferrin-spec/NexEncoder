@@ -1,7 +1,7 @@
 # NexEncoder NOC agent API
 
 Contract for NexNOC. The agent is `python3 -m nexencoder.noc`. The operator console
-(Apache and PHP on `http://127.0.0.1:8780/`, with `python3 -m nexencoder.console` as the
+(Apache and PHP on port 80, with `python3 -m nexencoder.console` as the
 live feed on `127.0.0.1:8788`) is a different process, has no login, and is not this API.
 
 API version: `v1`. Path prefix: `/api/noc/v1`. Software version is `identity.version`

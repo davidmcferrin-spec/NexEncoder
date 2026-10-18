@@ -372,7 +372,7 @@
 
   paint();
 
-  fetch("/api/config").then(function (response) {
+  fetch("/admin/config.php").then(function (response) {
     if (!response.ok) throw new Error("config");
     return response.json();
   }).then(function (body) {

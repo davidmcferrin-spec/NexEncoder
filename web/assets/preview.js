@@ -60,7 +60,7 @@
   }
 
   function connect() {
-    fetch("/api/preview").then(function (response) {
+    fetch("/admin/preview.php").then(function (response) {
       if (!response.ok) throw new Error("preview");
       return response.json();
     }).then(function (body) {
@@ -73,7 +73,7 @@
 
   function sideband() {
     var log = document.getElementById("sideband-log");
-    fetch("/api/sideband").then(function (response) {
+    fetch("/live/sideband.php").then(function (response) {
       if (!response.ok) throw new Error("sideband");
       return response.json();
     }).then(function (body) {

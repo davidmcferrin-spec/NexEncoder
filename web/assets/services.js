@@ -58,7 +58,7 @@
   }
 
   function load() {
-    fetch("/api/services").then(function (response) { return response.json(); }).then(render).catch(function () {
+    fetch("/admin/services.php").then(function (response) { return response.json(); }).then(render).catch(function () {
       $("svc-banner").hidden = false;
       $("svc-banner").textContent = "The console service list did not answer";
     });
@@ -77,7 +77,7 @@
     var log = $("journal");
     log.textContent = "";
     $("journal-title").textContent = unit;
-    source = new EventSource("/api/services/" + encodeURIComponent(unit) + "/log");
+    source = new EventSource("/live/log.php?unit=" + encodeURIComponent(unit));
     source.onmessage = function (event) { append(event.data); };
     source.addEventListener("error", function (event) {
       if (event.data) {

@@ -96,12 +96,19 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
         assert "nexencoder_admin_request" in text
     site = (ROOT / "config" / "apache-nexencoder.conf").read_text(encoding="utf-8")
     assert "DocumentRoot /var/lib/nexencoder/www" in site
-    assert "127.0.0.1:8780" in site
-    assert 'ProxyPass /api/ http://127.0.0.1:8788/api/' in site
-    assert 'ProxyPassMatch "^/metrics$"' in site
+    assert "<VirtualHost *:80>" in site
+    assert "ProxyPass" not in site
+    assert "8780" not in site
     listen = (ROOT / "config" / "apache-nexencoder-listen.conf").read_text(encoding="utf-8")
-    assert "Listen 127.0.0.1:8780" in listen
+    assert "Listen " not in listen
     js = (WEB / "assets" / "console.js").read_text(encoding="utf-8")
     assert "/admin/config.php" in js and "/admin/bars.php" in js
-    assert "/admin/service.php" in (WEB / "assets" / "services.js").read_text(encoding="utf-8")
-    assert "/admin/preset.php" in (WEB / "assets" / "effects.js").read_text(encoding="utf-8")
+    assert "/api/" not in js
+    services = (WEB / "assets" / "services.js").read_text(encoding="utf-8")
+    assert "/admin/service.php" in services and "/admin/services.php" in services
+    assert "/live/log.php" in services
+    effects = (WEB / "assets" / "effects.js").read_text(encoding="utf-8")
+    assert "/admin/preset.php" in effects and "/admin/recall.php" in effects
+    assert "/live/still.php" in effects
+    assert "/api/" not in (WEB / "assets" / "preview.js").read_text(encoding="utf-8")
+    assert "/api/" not in (WEB / "assets" / "metrics.js").read_text(encoding="utf-8")
