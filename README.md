@@ -26,7 +26,10 @@ directory of the user who ran sudo) into `/opt/decklink-sdk`, and installs the
 place. Neither archive is downloaded. It also installs pinned TSDuck 3.45-4798
 (the Ubuntu 24.04 package from the official release, skipped when `tsp` is already
 on `PATH`), a pinned MediaMTX v1.21.1 binary, `nexencoder-console.service`, the
-`nexencoder-channel@` template, and `nexencoder-noc.service`. `setup.sh` enables
+`nexencoder-channel@` template, `nexencoder-decklink-configure.service`, and
+`nexencoder-noc.service`. `setup.sh` builds `decklink-configure` from the SDK
+headers and, before the channels start, sets Duo 2 and 8K Pro connectors to
+half-duplex inputs so connectors 1–4 are separate capture pins. It enables
 and restarts Apache, Prometheus, node_exporter, MediaMTX, the console, the NOC agent,
 and `nexencoder-channel@A` and `@B`. A crashed channel, console, or MediaMTX is restarted
 with no start limit. A channel whose frame count stops moving is restarted by its supervisor.
@@ -70,7 +73,10 @@ DeckLink Duo 2 (3) and (4). Each layer takes a level from −4 to +4; 0 is the v
 A channel holds at most four layers, and two layers cannot share a level.
 
 Input A is DeckLink Duo 2 (1) or an SRT listener on port 9001. Input B is DeckLink Duo 2 (2)
-or port 9002. Output B's listener defaults to port 9101 so it does not take an input port.
+or port 9002. Auto, beside each raster menu, reads the locked SDI mode or the connected
+SRT caller and saves that raster when it is one of the six this encoder accepts. SDI Auto
+needs the channel stopped, because the probe opens the sub-device. An unmatched picture
+is reported and left unsaved. Restart the channel after Auto so capture uses the new raster. Output B's listener defaults to port 9101 so it does not take an input port.
 Layer −5 is a waiting picture (a slate, a 10–30 second loop, or color bars) and stays on
 the output when SDI unlocks or the SRT caller drops. The encode keeps running.
 `POST /api/channels/A/bars` with `{"enabled": true}` puts SMPTE bars and an ident
@@ -137,7 +143,10 @@ existing token or `noc.json`.
   simple HTML layers fit. Four animated HTML layers on both channels at once
   needs a larger host. The MS-01 has one half-height PCIe 4.0 x16 slot (x8 speed),
   so it needs a low-profile card. On a Duo 2 Mini the four connectors are two program
-  inputs plus one shared fill/key pair.
+  inputs plus one shared fill/key pair. The card ships in full duplex, which hides
+  connectors 3 and 4. `decklink-configure --apply-inputs` (run by
+  `nexencoder-decklink-configure` before the channels open the card) switches each
+  pin to an independent input.
 - **Capture card (per owner, both have a reference input and support 1080i59.94):**
   DeckLink Duo 2 Mini (PCIe 2.0 x4, enough for two HD inputs) or DeckLink 8K Pro Mini
   (PCIe 3.0 x8, 12G-SDI, room for four channels or 4K later). Full-height cards do not fit the MS-01.
@@ -150,6 +159,7 @@ existing token or `noc.json`.
 
 - [x] Phase 0: repo scaffold, `setup.sh`
 - [x] Phase 1: DeckLink capture argv (`yuv422p10`, one process per input, format codes) and VANC scan. Live card proof is still open.
+- [x] DeckLink connectors: `decklink-configure` sets Duo 2 and 8K Pro pins to half-duplex inputs before the channels start.
 - [x] Phase 2: parsers, translator, TS packetizer, injector with tests (2 TSDuck tests skip without `tstables`)
 - [x] Phase 3: H.264/AAC, tsp SCTE-35 insert, SRT caller/listener, HLS push/pull, channel supervisor
 - [x] Phase 4: MediaMTX preview (RTSP publish, WHEP on the monitor page) and caption/SCTE sideband. The operator console uses the NexApp theme.

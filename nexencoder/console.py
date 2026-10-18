@@ -59,6 +59,7 @@ class Console:
         splice_sender=None,
         sideband: Sideband | None = None,
         html_backend=None,
+        format_probe=None,
     ) -> None:
         repo = Path(__file__).resolve().parents[1]
         self.prometheus_url = prometheus_url
@@ -70,6 +71,7 @@ class Console:
         self.splice_sender = splice_sender
         self.sideband = sideband or Sideband()
         self.html_backend = html_backend or detect_html_backend
+        self.format_probe = format_probe
 
     def metrics_text(self) -> str:
         config = load_config(self.config_path)
@@ -182,6 +184,8 @@ def make_handler(console: Console):
                     self._inject_scte(unquote(parts[2]), body)
                 elif len(parts) == 4 and parts[0] == "api" and parts[1] == "channels" and parts[3] == "bars":
                     self._bars(unquote(parts[2]), body)
+                elif len(parts) == 4 and parts[0] == "api" and parts[1] == "channels" and parts[3] == "detect":
+                    self._detect(unquote(parts[2]))
                 else:
                     self._json(404, {"ok": False, "detail": "Unknown action"})
             except ServiceError as exc:
@@ -217,6 +221,16 @@ def make_handler(console: Console):
                 raise ValueError("enabled must be true or false")
             write_flag(bars_path(console.state_dir, channel_id), raw["enabled"])
             self._json(200, {"ok": True, "channel": channel_id, "enabled": raw["enabled"]})
+
+        def _detect(self, channel_id: str) -> None:
+            from .detect import detect_channel
+
+            if channel_id not in ("A", "B"):
+                raise ValueError("channel must be A or B")
+            found = detect_channel(
+                channel_id, console.config_path, console.state_dir, probe=console.format_probe,
+            )
+            self._json(200, found)
 
         def _save_sideband(self, body: bytes) -> None:
             raw = json.loads(body.decode("utf-8") or "{}")

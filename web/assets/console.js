@@ -329,6 +329,50 @@
   });
 
   CHANNELS.forEach(function (id) {
+    var auto = document.getElementById("auto-" + id);
+    if (!auto) return;
+    auto.addEventListener("click", function () {
+      auto.disabled = true;
+      var note = document.getElementById("auto-note-" + id);
+      if (note) note.textContent = "Looking…";
+      fetch("/admin/detect.php", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Requested-With": "NexEncoder"
+        },
+        body: JSON.stringify({ channel: id })
+      }).then(function (response) {
+        return response.json().then(function (body) {
+          return { ok: response.ok, body: body || {} };
+        });
+      }).then(function (result) {
+        var body = result.body;
+        if (!result.ok || body.ok === false) {
+          throw new Error(body.detail || "Auto did not find a format.");
+        }
+        if (body.config) {
+          config = normalize(body.config);
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+        } else if (body.format && config.inputs[id]) {
+          config.inputs[id].format = body.format;
+        }
+        dirty = true;
+        fieldError(id, "");
+        setSaved(id, true);
+        if (note) note.textContent = body.detail || "";
+        paint();
+      }).catch(function (err) {
+        if (note) note.textContent = "";
+        fieldError(id, err.message || "Auto did not find a format.");
+        setSaved(id, false);
+      }).then(function () {
+        auto.disabled = false;
+      });
+    });
+  });
+
+  CHANNELS.forEach(function (id) {
     var button = document.getElementById("bars-" + id);
     if (!button) return;
     button.addEventListener("click", function () {

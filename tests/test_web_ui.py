@@ -90,7 +90,7 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     feed = (WEB / "includes" / "feed.php").read_text(encoding="utf-8")
     assert "http://127.0.0.1:8788" in feed
     assert "NexEncoder" in feed
-    for script in ("config.php", "bars.php", "service.php", "preset.php"):
+    for script in ("config.php", "bars.php", "service.php", "preset.php", "detect.php"):
         text = (WEB / "admin" / script).read_text(encoding="utf-8")
         assert "includes/feed.php" in text
         assert "nexencoder_admin_request" in text
@@ -102,7 +102,7 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     listen = (ROOT / "config" / "apache-nexencoder-listen.conf").read_text(encoding="utf-8")
     assert "Listen " not in listen
     js = (WEB / "assets" / "console.js").read_text(encoding="utf-8")
-    assert "/admin/config.php" in js and "/admin/bars.php" in js
+    assert "/admin/config.php" in js and "/admin/bars.php" in js and "/admin/detect.php" in js
     assert "/api/" not in js
     services = (WEB / "assets" / "services.js").read_text(encoding="utf-8")
     assert "/admin/service.php" in services and "/admin/services.php" in services
@@ -110,5 +110,10 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     effects = (WEB / "assets" / "effects.js").read_text(encoding="utf-8")
     assert "/admin/preset.php" in effects and "/admin/recall.php" in effects
     assert "/live/still.php" in effects
-    assert "/api/" not in (WEB / "assets" / "preview.js").read_text(encoding="utf-8")
+    preview = (WEB / "assets" / "preview.js").read_text(encoding="utf-8")
+    assert "/api/" not in preview
+    monitor = (WEB / "monitor.php").read_text(encoding="utf-8")
+    assert 'id="sideband-A"' in monitor and 'id="sideband-B"' in monitor
+    assert 'id="sideband-log"' not in monitor
+    assert 'getElementById("sideband-"' in preview
     assert "/api/" not in (WEB / "assets" / "metrics.js").read_text(encoding="utf-8")

@@ -70,6 +70,10 @@ header('X-Content-Type-Options: nosniff');
           <option value="720p59.94">720p 59.94</option>
           <option value="720p50">720p 50</option>
         </select>
+        <p class="save-row">
+          <button type="button" class="btn-text" id="auto-A">Auto</button>
+          <span class="muted" id="auto-note-A"></span>
+        </p>
         <label for="waiting-A">Waiting picture</label>
         <select id="waiting-A" data-channel="A" data-key="waiting">
           <option value="slate">Waiting for Input</option>
@@ -104,6 +108,10 @@ header('X-Content-Type-Options: nosniff');
           <option value="720p59.94">720p 59.94</option>
           <option value="720p50">720p 50</option>
         </select>
+        <p class="save-row">
+          <button type="button" class="btn-text" id="auto-B">Auto</button>
+          <span class="muted" id="auto-note-B"></span>
+        </p>
         <label for="waiting-B">Waiting picture</label>
         <select id="waiting-B" data-channel="B" data-key="waiting">
           <option value="slate">Waiting for Input</option>

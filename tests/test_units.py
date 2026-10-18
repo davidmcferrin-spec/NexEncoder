@@ -31,4 +31,6 @@ def test_channel_watchdog_and_config_exit():
     assert fields["WatchdogSec"] == "90"
     assert fields["RestartPreventExitStatus"] == "78"
     assert "mediamtx.service" in fields["Wants"]
+    assert "nexencoder-decklink-configure.service" in fields["After"]
+    assert "nexencoder-decklink-configure.service" in fields["Wants"]
     assert "BindsTo" not in fields

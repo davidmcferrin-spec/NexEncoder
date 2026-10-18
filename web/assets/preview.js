@@ -72,7 +72,6 @@
   }
 
   function sideband() {
-    var log = document.getElementById("sideband-log");
     fetch("/live/sideband.php").then(function (response) {
       if (!response.ok) throw new Error("sideband");
       return response.json();
@@ -87,21 +86,23 @@
       ["A", "B"].forEach(function (id) {
         var caption = document.getElementById("caption-" + id);
         var badge = document.getElementById("scte-" + id);
+        var log = document.getElementById("sideband-" + id);
+        var rows = events.filter(function (event) { return event.channel === id; });
         if (caption) {
           caption.textContent = latest[id]
             ? (latest[id].label + " · " + latest[id].text)
             : "CC1 · waiting";
         }
         if (badge) badge.textContent = splice[id];
+        if (!log) return;
+        if (!rows.length) {
+          log.textContent = "Waiting for caption and splice events from the live path.";
+          return;
+        }
+        log.textContent = rows.slice(-12).map(function (event) {
+          return event.label + " " + event.text;
+        }).join("\n");
       });
-      if (!log) return;
-      if (!events.length) {
-        log.textContent = "Waiting for caption and splice events from the live path.";
-        return;
-      }
-      log.textContent = events.slice(-12).map(function (event) {
-        return event.channel + " " + event.label + " " + event.text;
-      }).join("\n");
     }).catch(function () {});
   }
 

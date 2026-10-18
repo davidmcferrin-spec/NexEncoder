@@ -206,6 +206,34 @@ def test_effect_recall_and_normalize_leave_the_pipeline_running(tmp_path):
         httpd.shutdown()
 
 
+def test_auto_saves_the_detected_raster_and_leaves_a_miss_alone(tmp_path):
+    calls = []
+
+    def probe(argv):
+        calls.append(argv)
+        if "DeckLink Duo 2 (2)" in argv:
+            return "No input signal detected\n"
+        return "Found Decklink mode 1280 x 720 with rate 59.94\n"
+
+    httpd, port = _start(Console(
+        config_path=tmp_path / "config.json",
+        state_dir=tmp_path / "state",
+        format_probe=probe,
+    ))
+    try:
+        found = _post(port, "/api/channels/A/detect", {})
+        assert found["ok"] is True and found["format"] == "720p59.94"
+        assert found["config"]["inputs"]["A"]["format"] == "720p59.94"
+        assert found["config"]["inputs"]["B"]["format"] == "1080i59.94"
+        missed = _post(port, "/api/channels/B/detect", {})
+        assert missed["ok"] is False and missed["format"] == ""
+        assert "No signal" in missed["detail"]
+        assert json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))["inputs"]["B"]["format"] == "1080i59.94"
+        assert any("decklink" in argv for argv in calls)
+    finally:
+        httpd.shutdown()
+
+
 def test_bars_toggle_does_not_rewrite_the_channel_config(tmp_path):
     httpd, port = _start(Console(
         config_path=tmp_path / "config.json",

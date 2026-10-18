@@ -7,3 +7,4 @@ __pycache__/
 /vendor/
 /etc/local.toml
 /var/
+/decklink-configure

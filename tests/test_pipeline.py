@@ -67,10 +67,12 @@ def test_srt_input_keeps_an_encode_clock_without_a_still():
 
 def test_splice_and_srt_listener():
     splice = splice_argv("A")
+    assert splice[splice.index("-O") + 1] == "udp"
     assert "127.0.0.1:19001" in splice
     assert "127.0.0.1:19101" in splice
     assert "496/0x86" in splice
     listener = egress_argv("A", "srt-listener", "", 9000, "", "/tmp/hls")
+    assert listener[listener.index("-I") + 1] == "udp"
     assert listener[listener.index("--listener") + 1] == ":9000"
     assert listener[listener.index("--statistics-interval") + 1] == str(SRT_STATS_INTERVAL_MS)
     assert f"--json-line={SRT_STATS_PREFIX}" in listener

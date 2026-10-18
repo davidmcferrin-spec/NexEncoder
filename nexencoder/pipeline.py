@@ -16,6 +16,7 @@ FEED_PORT = {"A": 19001, "B": 19002}
 SPLICE_PORT = {"A": 19101, "B": 19102}
 VANC_PORT = {"A": 19201, "B": 19202}
 # One reader per channel, so the program feed stays on loopback unicast.
+# TSDuck's ip plugin accepts multicast only, so both ends of this feed use udp.
 FEED_ADDR = "127.0.0.1"
 SCTE_PID = 0x1F0
 PREVIEW_SIZE = "960:540"
@@ -237,7 +238,7 @@ def splice_argv(channel_id: str, tsp: str = "tsp") -> list[str]:
         "--inject-interval", "500",
         "--min-inter-packet", "400",
         "-P", "filter", "--negate", "--pid", "0x1FFF",
-        "-O", "ip", f"{FEED_ADDR}:{port}",
+        "-O", "udp", f"{FEED_ADDR}:{port}",
         "--local-address", FEED_ADDR,
     ]
 
@@ -258,7 +259,7 @@ def srt_argv(
     feed = FEED_PORT[channel_id]
     argv = [
         tsp,
-        "-I", "ip", f"{FEED_ADDR}:{feed}",
+        "-I", "udp", f"{FEED_ADDR}:{feed}",
         "--local-address", FEED_ADDR,
         "-O", "srt",
         "--latency", str(SRT_LATENCY_MS),

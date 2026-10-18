@@ -12,7 +12,9 @@
 # official release and installed when tsp is not already on PATH.
 # Desktop Video and the DeckLink SDK are installed from archives already in
 # /home/nexstar (or the home of the user who started this script). They are
-# not downloaded. Rebuild FFmpeg with NEXENCODER_FORCE_FFMPEG_BUILD=1.
+# not downloaded. decklink-configure is built from those headers and a boot
+# oneshot sets Duo 2 / 8K Pro connectors to half-duplex inputs before the
+# channels open the card. Rebuild FFmpeg with NEXENCODER_FORCE_FFMPEG_BUILD=1.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -219,6 +221,19 @@ install_decklink() {
   rm -rf "$work"
 }
 
+install_decklink_configure() {
+  local sdk
+  if ! sdk="$(decklink_sdk_dir)"; then
+    die "DeckLink SDK headers not found. Put Blackmagic_DeckLink_SDK_*.zip in /home/nexstar."
+  fi
+  command -v g++ >/dev/null 2>&1 || die "g++ is required to build decklink-configure"
+  command -v make >/dev/null 2>&1 || die "make is required to build decklink-configure"
+  log "building decklink-configure with headers in ${sdk}"
+  make DECKLINK_SDK="$sdk" decklink-configure
+  $SUDO install -m 0755 decklink-configure /usr/local/bin/decklink-configure
+  log "installed /usr/local/bin/decklink-configure"
+}
+
 install_ffmpeg() {
   local version=9.0.2
   local url="https://ffmpeg.org/releases/ffmpeg-${version}.tar.xz"
@@ -421,6 +436,7 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
   fi
 
   install_decklink
+  install_decklink_configure
   install_ffmpeg
   if dpkg -s desktopvideo >/dev/null 2>&1; then
     desktopvideo_version=$(dpkg-query -W -f='${Version}' desktopvideo 2>/dev/null || true)
@@ -460,17 +476,21 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
   sed "s|@ROOT@|$(pwd)|g" systemd/nexencoder-channel@.service > "$unit_tmp"
   $SUDO cp "$unit_tmp" /etc/systemd/system/nexencoder-channel@.service
   rm -f "$unit_tmp"
+  $SUDO cp systemd/nexencoder-decklink-configure.service /etc/systemd/system/nexencoder-decklink-configure.service
   $SUDO cp systemd/mediamtx.service /etc/systemd/system/mediamtx.service
   if command -v systemctl >/dev/null 2>&1; then
     $SUDO systemctl daemon-reload
     $SUDO systemctl enable prometheus prometheus-node-exporter nexencoder-console \
-      nexencoder-channel@A nexencoder-channel@B
+      nexencoder-decklink-configure nexencoder-channel@A nexencoder-channel@B
     $SUDO systemctl restart prometheus prometheus-node-exporter nexencoder-console \
       || log "WARNING: could not start prometheus or the console"
     if [ -x /usr/local/bin/mediamtx ]; then
       $SUDO systemctl enable mediamtx
       $SUDO systemctl restart mediamtx || log "WARNING: could not start mediamtx"
     fi
+    $SUDO systemctl stop nexencoder-channel@A nexencoder-channel@B || true
+    $SUDO systemctl start nexencoder-decklink-configure \
+      || log "WARNING: could not set DeckLink connectors to inputs. Stop the channels and re-run: decklink-configure --apply-inputs"
     $SUDO systemctl restart nexencoder-channel@A nexencoder-channel@B \
       || log "WARNING: could not start a channel"
   fi

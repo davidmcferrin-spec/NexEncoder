@@ -1,0 +1,27 @@
+# nexencoder-decklink-configure.service — set Duo 2 / 8K Pro BNCs to inputs.
+#
+# Activates bmdProfileTwoSubDevicesHalfDuplex (independent connectors) via the
+# DeckLink SDK so connectors 1-4 are program A, program B, fill, and key.
+# Runs once at boot before the channels open the card. SetActive persists in
+# Desktop Video preferences.
+#
+#   sudo systemctl start nexencoder-decklink-configure
+#   sudo /usr/local/bin/decklink-configure --apply-inputs
+#
+# Stop nexencoder-channel@A and @B before a manual re-apply if the card is busy.
+
+[Unit]
+Description=NexEncoder DeckLink half-duplex connector mapping
+Before=nexencoder-channel@A.service nexencoder-channel@B.service
+After=systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Root: Desktop Video preferences are root-owned. A missing binary or a host
+# with no DeckLink API must not block the channels (exit 1 becomes 0).
+ExecStart=/bin/bash -c 'if [ ! -x /usr/local/bin/decklink-configure ]; then echo "decklink-configure missing - skip"; exit 0; fi; /usr/local/bin/decklink-configure --apply-inputs; rc=$?; [ "$rc" -eq 1 ] && exit 0; exit "$rc"'
+
+[Install]
+WantedBy=multi-user.target

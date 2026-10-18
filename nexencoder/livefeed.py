@@ -71,7 +71,7 @@ def srt_ingest_argv(port: int, format_name: str, still_path: str, ffmpeg: str = 
         f"scale={PREVIEW_SIZE}:force_original_aspect_ratio=decrease,format=yuv420p[vjpg]"
     )
     return [
-        ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "warning",
+        ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "info",
         "-i", srt_url(port),
         "-filter_complex", graph,
         "-map", "[vraw]", "-f", "rawvideo", "-pix_fmt", "bgra", "pipe:1",
@@ -229,6 +229,7 @@ def _run_srt_once(
 
     proc = None
     audio_fd = None
+    source_file = signal_file.with_name(signal_file.stem + ".source.json")
     try:
         read_fd, write_fd = os.pipe()
         try:
@@ -237,7 +238,7 @@ def _run_srt_once(
                 os.close(write_fd)
                 write_fd = AUDIO_FD
             proc = spawn(
-                argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 pass_fds=(AUDIO_FD,), close_fds=True,
             )
         finally:
@@ -248,6 +249,13 @@ def _run_srt_once(
         audio_fd = read_fd
         audio = os.fdopen(audio_fd, "rb")
         audio_fd = None
+        if proc.stderr is not None:
+            threading.Thread(
+                target=_watch_srt_log,
+                args=(proc.stderr, source_file, stop),
+                name="nexencoder-srt-log",
+                daemon=True,
+            ).start()
 
         def pump_audio() -> None:
             while not stop.is_set():
@@ -271,6 +279,7 @@ def _run_srt_once(
         log.warning("SRT ingest stopped", exc_info=True)
     finally:
         write_flag(signal_file, False)
+        source_file.unlink(missing_ok=True)
         if audio_fd is not None:
             os.close(audio_fd)
         _stop_proc(proc)
@@ -292,6 +301,20 @@ def run_srt_ingest(
         _run_srt_once(argv, video, pcm, signal_file, stop, spawn)
         if stop.wait(2):
             break
+
+
+def _watch_srt_log(stream, source_file: Path, stop: threading.Event) -> None:
+    """Keep the caller's raster from the ffmpeg stream banner."""
+    from .detect import note_source_line
+
+    try:
+        for raw in stream:
+            if stop.is_set():
+                break
+            line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+            note_source_line(source_file, line)
+    except Exception:
+        log.warning("SRT format watcher stopped", exc_info=True)
 
 
 def watch_decklink_signal(stream, signal_file: Path, stop: threading.Event) -> None:

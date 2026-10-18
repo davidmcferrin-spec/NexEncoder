@@ -176,7 +176,11 @@ button.unit-row.is-selected,
 .unit-row .badge { align-self: center; }
 #journal { min-height: 320px; max-height: 520px; }
 
-#sideband-log { white-space: pre-wrap; }
+.sideband-log {
+  white-space: pre-wrap;
+  max-height: 11rem;
+  margin-top: 0.75rem;
+}
 
 .effects-layout {
   display: grid;

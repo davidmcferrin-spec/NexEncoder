@@ -64,6 +64,7 @@ header('X-Content-Type-Options: nosniff');
           <span>SCTE-35</span>
           <span class="badge" id="scte-A">Idle</span>
         </div>
+        <div class="log-box sideband-log" id="sideband-A" role="log" aria-label="Input A caption and splice log">Waiting for caption and splice events from the live path.</div>
       </section>
       <section class="panel preview-card">
         <h2>Input B</h2>
@@ -76,12 +77,9 @@ header('X-Content-Type-Options: nosniff');
           <span>SCTE-35</span>
           <span class="badge" id="scte-B">Idle</span>
         </div>
+        <div class="log-box sideband-log" id="sideband-B" role="log" aria-label="Input B caption and splice log">Waiting for caption and splice events from the live path.</div>
       </section>
     </div>
-    <section class="panel" style="margin-top:1rem">
-      <h2>Sideband</h2>
-      <div class="log-box" id="sideband-log" role="log" aria-label="Caption and splice log">Waiting for caption and splice events from the live path.</div>
-    </section>
   </main>
   <footer class="shell-footer">
     <span>NexEncoder</span>
