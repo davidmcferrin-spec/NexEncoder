@@ -32,13 +32,13 @@ to SCTE-35) and shown on a low-latency WebRTC proxy preview via MediaMTX.
   One SDI fill/key pair, DeckLink inputs 3 and 4, is shared. 608/708 stay A/53 side data on the
   primary frame. SCTE-104 still leaves the demuxer as UDP and returns as SCTE-35. SRT inputs have no VANC.
 - Packages: APT only (Ubuntu 24.04 LTS), plus a pinned FFmpeg 9.0.2 built with DeckLink
-  and the pinned MediaMTX binary. No pip, no venv. TSDuck and Desktop Video are checked
-  for, not downloaded. Channel units restart forever; a stalled frame count restarts the pipeline.
+  and the pinned MediaMTX binary. No pip, no venv. TSDuck is checked for, not downloaded.
+  Desktop Video and the DeckLink SDK are installed from archives in `/home/nexstar`, not downloaded. Channel units restart forever; a stalled frame count restarts the pipeline.
 - Preview: MediaMTX. ffmpeg publishes RTSP to `127.0.0.1:8554`; the monitor page plays WHEP.
 
 ## Hardware (see README "Target hardware")
 - Host: Dell R440+ or Minisforum MS-01 (low-profile cards only). Card: DeckLink Duo 2 Mini or
-  8K Pro Mini, Desktop Video 16. Both cards have a reference input and support 1080i59.94.
+  8K Pro Mini, Desktop Video 15 or 16. Both cards have a reference input and support 1080i59.94.
 
 ## Layout
 - `nexencoder/` Python package (parsers, translators, control plane)

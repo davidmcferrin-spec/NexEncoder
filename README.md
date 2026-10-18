@@ -19,11 +19,13 @@ Ubuntu 24.04 LTS. Packages come from APT (no pip, no venv): Python, GStreamer,
 Prometheus, and node_exporter. `setup.sh` downloads FFmpeg 9.0.2 and builds it into
 `/usr/local` with DeckLink (`--enable-nonfree`), OpenSSL (`--enable-version3`), libx264,
 and libopus. The build patches the DeckLink demuxer so caption CDPs and SCTE-104 ride a
-localhost UDP feed to the channel supervisor, which inserts SCTE-35. That build needs the
-Desktop Video headers in `/opt/decklink-sdk`. It also installs a pinned MediaMTX v1.21.1 binary,
+localhost UDP feed to the channel supervisor, which inserts SCTE-35. `setup.sh` installs
+the DeckLink SDK from `Blackmagic_DeckLink_SDK_*.zip` in `/home/nexstar` (or the home
+directory of the user who ran sudo) into `/opt/decklink-sdk`, and installs the
+`desktopvideo` package from `Blackmagic_Desktop_Video_Linux_*.tar.gz` in that same
+place. Neither archive is downloaded. It also installs a pinned MediaMTX v1.21.1 binary,
 `nexencoder-console.service`, the `nexencoder-channel@` template, and
-`nexencoder-noc.service`. TSDuck and the
-Desktop Video driver are checked for and not downloaded. Channel units stay stopped
+`nexencoder-noc.service`. TSDuck is checked for and not downloaded. Channel units stay stopped
 until you start them. A crashed channel, console, or MediaMTX is restarted with no
 start limit. A channel whose frame count stops moving is restarted by its supervisor.
 A bad channel config exits 78 and stays stopped until the config is fixed.
@@ -113,6 +115,7 @@ existing token or `noc.json`.
 | `vanc.py` | Scan a VANC buffer for CEA-708 CDPs and SCTE-104 |
 | `vanc_feed.py` | VANC datagrams to SCTE-35 and monitor notes |
 | `decklink_patch.py` | Insert the VANC forwarder into the FFmpeg 9.0.2 DeckLink demuxer |
+| `decklink_install.py` | Local Desktop Video archive and DeckLink SDK headers for `setup.sh` |
 | `pipeline.py` | ffmpeg capture, tsp spliceinject, SRT, and HLS argv |
 | `livefeed.py` | SRT ingest, waiting-loop feeder, and the DeckLink signal flag |
 | `effects.py` | Squeeze quads, CG layers, presets, recall and normalize |
@@ -136,8 +139,9 @@ existing token or `noc.json`.
 - **Capture card (per owner, both have a reference input and support 1080i59.94):**
   DeckLink Duo 2 Mini (PCIe 2.0 x4, enough for two HD inputs) or DeckLink 8K Pro Mini
   (PCIe 3.0 x8, 12G-SDI, room for four channels or 4K later). Full-height cards do not fit the MS-01.
-- **Driver:** Desktop Video 16 and matching SDK. Check its release notes against the Ubuntu 24.04
-  kernel in use before deploying.
+- **Driver:** Desktop Video 15 or 16 and the matching SDK, as
+  `Blackmagic_Desktop_Video_Linux_*.tar.gz` and `Blackmagic_DeckLink_SDK_*.zip` in
+  `/home/nexstar`. Check the release notes against the Ubuntu 24.04 kernel before deploying.
 - **Not yet benchmarked.** CPU headroom figures are estimates until measured on the real unit.
 
 ## Status

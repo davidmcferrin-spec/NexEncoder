@@ -7,9 +7,10 @@
 # FFmpeg 9.0.2 is downloaded and built with DeckLink (--enable-nonfree), OpenSSL
 # (--enable-version3), libx264, and libopus. The DeckLink demuxer is patched to forward VANC captions and
 # SCTE-104 to the channel supervisor. The nexeffect filter is added for the
-# four-corner squeeze and CG stack. TSDuck and Desktop Video are checked
-# for, not downloaded (Desktop Video needs a Blackmagic login).
-# Rebuild FFmpeg with NEXENCODER_FORCE_FFMPEG_BUILD=1.
+# four-corner squeeze and CG stack. TSDuck is checked for, not downloaded.
+# Desktop Video and the DeckLink SDK are installed from archives already in
+# /home/nexstar (or the home of the user who started this script). They are
+# not downloaded. Rebuild FFmpeg with NEXENCODER_FORCE_FFMPEG_BUILD=1.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -83,21 +84,78 @@ pin_listen() {
   printf '\n# nexencoder-listen\nARGS="--web.listen-address=%s"\n' "$addr" | $SUDO tee -a "$file" >/dev/null
 }
 
+decklink_sdk_dir() {
+  local dir
+  for dir in /opt/decklink-sdk /usr/include; do
+    if [ -f "${dir}/DeckLinkAPI.h" ] && [ -f "${dir}/DeckLinkAPIDispatch.cpp" ] && [ -f "${dir}/DeckLinkAPIVersion.h" ]; then
+      printf '%s\n' "$dir"
+      return 0
+    fi
+  done
+  return 1
+}
+
+install_decklink() {
+  local sudo_home="" work zip archive deb
+  if [ -n "${SUDO_USER:-}" ]; then
+    sudo_home="$(getent passwd "$SUDO_USER" 2>/dev/null | awk -F: '{print $6}' || true)"
+  fi
+  work="$(mktemp -d)"
+  if ! decklink_sdk_dir >/dev/null; then
+    zip="$(python3 -c 'import sys; from nexencoder.decklink_install import latest_sdk; found = latest_sdk(sys.argv[1] or None, sys.argv[2] or None); print(found or "")' "${HOME:-}" "$sudo_home")"
+    if [ -z "$zip" ]; then
+      rm -rf "$work"
+      die "DeckLink SDK headers not found. Put Blackmagic_DeckLink_SDK_*.zip in /home/nexstar."
+    fi
+    log "installing DeckLink SDK headers from ${zip}"
+    python3 -c 'import sys; from pathlib import Path; from nexencoder.decklink_install import extract_sdk; extract_sdk(Path(sys.argv[1]), Path(sys.argv[2]))' "$zip" "$work/include"
+    $SUDO mkdir -p /opt/decklink-sdk
+    $SUDO cp -a "$work/include/." /opt/decklink-sdk/
+    if ! decklink_sdk_dir >/dev/null; then
+      rm -rf "$work"
+      die "DeckLink SDK headers were not installed to /opt/decklink-sdk"
+    fi
+  else
+    log "DeckLink SDK headers are already installed ($(decklink_sdk_dir))"
+  fi
+  if dpkg -s desktopvideo >/dev/null 2>&1; then
+    log "Desktop Video is already installed"
+    rm -rf "$work"
+    return 0
+  fi
+  archive="$(python3 -c 'import sys; from nexencoder.decklink_install import latest_driver; found = latest_driver(sys.argv[1] or None, sys.argv[2] or None); print(found or "")' "${HOME:-}" "$sudo_home")"
+  if [ -z "$archive" ]; then
+    log "WARNING: Desktop Video is not installed. Put Blackmagic_Desktop_Video_Linux_*.tar.gz in /home/nexstar."
+    rm -rf "$work"
+    return 0
+  fi
+  log "installing Desktop Video from ${archive}"
+  rm -rf "$work"
+  work="$(mktemp -d)"
+  tar -xzf "$archive" -C "$work"
+  deb="$(python3 -c 'import sys; from pathlib import Path; from nexencoder.decklink_install import find_driver_deb; print(find_driver_deb(Path(sys.argv[1])))' "$work")"
+  $SUDO apt-get update -qq
+  $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq dkms "linux-headers-$(uname -r)"
+  if ! $SUDO dpkg -i "$deb"; then
+    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -f
+  fi
+  if ! dpkg -s desktopvideo >/dev/null 2>&1; then
+    rm -rf "$work"
+    die "Desktop Video did not install from ${archive}"
+  fi
+  $SUDO ldconfig
+  rm -rf "$work"
+}
+
 install_ffmpeg() {
   local version=9.0.2
   local url="https://ffmpeg.org/releases/ffmpeg-${version}.tar.xz"
   local sha=8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
   local prefix=/usr/local
   local bin="${prefix}/bin/ffmpeg"
-  local sdk="" dir
-  for dir in /opt/decklink-sdk /usr/include; do
-    if [ -f "${dir}/DeckLinkAPI.h" ] && [ -f "${dir}/DeckLinkAPIDispatch.cpp" ] && [ -f "${dir}/DeckLinkAPIVersion.h" ]; then
-      sdk="$dir"
-      break
-    fi
-  done
-  if [ -z "$sdk" ]; then
-    die "DeckLink SDK headers not found. Copy the Desktop Video Linux include directory to /opt/decklink-sdk (DeckLinkAPI.h, DeckLinkAPIDispatch.cpp, DeckLinkAPIVersion.h)."
+  local sdk
+  if ! sdk="$(decklink_sdk_dir)"; then
+    die "DeckLink SDK headers not found. Put Blackmagic_DeckLink_SDK_*.zip in /home/nexstar."
   fi
   if [ "${NEXENCODER_FORCE_FFMPEG_BUILD:-}" != "1" ] && [ -x "$bin" ]; then
     local ver conf
@@ -215,16 +273,6 @@ install_noc_agent() {
 }
 
 if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt-get >/dev/null 2>&1; then
-  sdk_ok=0
-  for dir in /opt/decklink-sdk /usr/include; do
-    if [ -f "${dir}/DeckLinkAPI.h" ] && [ -f "${dir}/DeckLinkAPIDispatch.cpp" ] && [ -f "${dir}/DeckLinkAPIVersion.h" ]; then
-      sdk_ok=1
-      break
-    fi
-  done
-  if [ "$sdk_ok" -eq 0 ]; then
-    die "DeckLink SDK headers not found. Copy the Desktop Video Linux include directory to /opt/decklink-sdk (DeckLinkAPI.h, DeckLinkAPIDispatch.cpp, DeckLinkAPIVersion.h)."
-  fi
   prom_missing=()
   for pkg in prometheus prometheus-node-exporter; do
     dpkg -s "$pkg" >/dev/null 2>&1 || prom_missing+=("$pkg")
@@ -281,11 +329,14 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
     log "WARNING: tsp is not on PATH. SCTE-35 insertion needs TSDuck from https://tsduck.io/"
   fi
 
+  install_decklink
   install_ffmpeg
-  if [ -e /usr/lib/libDeckLinkAPI.so ] || [ -e /usr/lib/x86_64-linux-gnu/libDeckLinkAPI.so ]; then
-    log "Desktop Video library is present"
-  else
-    log "WARNING: libDeckLinkAPI.so was not found. Desktop Video 16 is a separate install and is what creates /dev/blackmagic."
+  if dpkg -s desktopvideo >/dev/null 2>&1; then
+    desktopvideo_version=$(dpkg-query -W -f='${Version}' desktopvideo 2>/dev/null || true)
+    log "Desktop Video is installed (${desktopvideo_version})"
+    if [ ! -e /dev/blackmagic ]; then
+      log "Reboot so the Desktop Video module can create /dev/blackmagic."
+    fi
   fi
 
   $SUDO mkdir -p /var/lib/nexencoder/hls /var/lib/nexencoder/state /etc/nexencoder
