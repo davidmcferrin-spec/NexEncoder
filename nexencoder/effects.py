@@ -24,7 +24,7 @@ STILL_SECONDS = 8
 LEVELS = frozenset({-4, -3, -2, -1, 1, 2, 3, 4})
 SDI_FILL = "DeckLink Duo 2 (3)"
 SDI_KEY = "DeckLink Duo 2 (4)"
-HTML_ORIGIN = "http://127.0.0.1:8788"
+HTML_ORIGIN = "http://127.0.0.1:8780"
 WAITING_MODES = frozenset({"slate", "loop", "bars"})
 
 

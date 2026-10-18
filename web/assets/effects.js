@@ -461,7 +461,7 @@
     document.getElementById("save-preset").addEventListener("click", function () {
       var body = effectBody();
       body.name = document.getElementById("preset-name").value.trim();
-      post("/api/effects/presets", body).then(function () {
+      post("/admin/preset.php", body).then(function () {
         note(true, "Saved " + body.name + ".");
         return fetch("/api/effects/presets").then(function (response) { return response.json(); });
       }).then(function (payload) {

@@ -137,7 +137,7 @@ def test_preset_limits_layers_and_raster():
         ],
     }
     effect = normalize_effect(good)
-    assert effect["layers"][0]["source"]["url"].startswith("http://127.0.0.1:8788/cg/bug.html")
+    assert effect["layers"][0]["source"]["url"].startswith("http://127.0.0.1:8780/cg/bug.html")
     assert effect["layers"][1]["source"] == {"type": "sdi-key"}
     ndi = normalize_effect({
         "format": "1080i59.94",

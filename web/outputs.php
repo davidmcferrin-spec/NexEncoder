@@ -1,3 +1,8 @@
+<?php
+declare(strict_types=1);
+header('Cache-Control: no-store');
+header('X-Content-Type-Options: nosniff');
+?>
 <!DOCTYPE html>
 <html lang="en" data-theme-pref="system">
 <head>
@@ -16,7 +21,7 @@
 </head>
 <body class="page-shell">
   <header class="shell-top">
-    <a class="shell-brand" href="index.html">NexEncoder</a>
+    <a class="shell-brand" href="index.php">NexEncoder</a>
     <div class="shell-top-actions">
       <button type="button" class="btn-text" id="theme-toggle" title="Theme">Theme</button>
     </div>
@@ -30,13 +35,13 @@
       </div>
     </div>
     <nav class="side-nav" aria-label="Primary">
-      <a href="index.html"><span class="nav-ico">▦</span>Dashboard</a>
-      <a href="inputs.html"><span class="nav-ico">▤</span>Inputs</a>
-      <a class="is-active" href="outputs.html"><span class="nav-ico">↗</span>Outputs</a>
-      <a href="monitor.html"><span class="nav-ico">◉</span>Monitor</a>
-      <a href="effects.html"><span class="nav-ico">▣</span>Effects</a>
-      <a href="metrics.html"><span class="nav-ico">◇</span>Metrics</a>
-      <a href="services.html"><span class="nav-ico">⚙</span>Services</a>
+      <a href="index.php"><span class="nav-ico">▦</span>Dashboard</a>
+      <a href="inputs.php"><span class="nav-ico">▤</span>Inputs</a>
+      <a class="is-active" href="outputs.php"><span class="nav-ico">↗</span>Outputs</a>
+      <a href="monitor.php"><span class="nav-ico">◉</span>Monitor</a>
+      <a href="effects.php"><span class="nav-ico">▣</span>Effects</a>
+      <a href="metrics.php"><span class="nav-ico">◇</span>Metrics</a>
+      <a href="services.php"><span class="nav-ico">⚙</span>Services</a>
     </nav>
     <div class="side-foot">HD-SDI · SRT / HLS</div>
   </aside>

@@ -6,15 +6,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "web"
-PAGES = ("index.html", "inputs.html", "outputs.html", "monitor.html", "effects.html", "metrics.html", "services.html")
+PAGES = ("index.php", "inputs.php", "outputs.php", "monitor.php", "effects.php", "metrics.php", "services.php")
 PAGE_SCRIPTS = {
-    "index.html": ["assets/theme.js", "assets/console.js"],
-    "inputs.html": ["assets/theme.js", "assets/console.js"],
-    "outputs.html": ["assets/theme.js", "assets/console.js"],
-    "monitor.html": ["assets/theme.js", "assets/console.js", "assets/preview.js"],
-    "effects.html": ["assets/theme.js", "assets/console.js", "assets/effects.js"],
-    "metrics.html": ["assets/theme.js", "assets/console.js", "assets/metrics.js"],
-    "services.html": ["assets/theme.js", "assets/console.js", "assets/services.js"],
+    "index.php": ["assets/theme.js", "assets/console.js"],
+    "inputs.php": ["assets/theme.js", "assets/console.js"],
+    "outputs.php": ["assets/theme.js", "assets/console.js"],
+    "monitor.php": ["assets/theme.js", "assets/console.js", "assets/preview.js"],
+    "effects.php": ["assets/theme.js", "assets/console.js", "assets/effects.js"],
+    "metrics.php": ["assets/theme.js", "assets/console.js", "assets/metrics.js"],
+    "services.php": ["assets/theme.js", "assets/console.js", "assets/services.js"],
 }
 SHELL = ("page-shell", "shell-top", "shell-sidebar", "shell-main", "shell-footer")
 
@@ -59,10 +59,15 @@ def test_theme_kit_is_the_nexapp_sheet():
     assert "nexapp-theme" in script and "NexAppTheme" in script
 
 
+def _page_html(name: str) -> str:
+    text = (WEB / name).read_text(encoding="utf-8")
+    return re.sub(r"<\?php.*?\?>\s*", "", text, count=1, flags=re.S)
+
+
 def test_pages_share_the_nexapp_shell():
     version = _version()
     for name in PAGES:
-        text = (WEB / name).read_text(encoding="utf-8")
+        text = _page_html(name)
         parser = PageParser()
         parser.feed(text)
         assert parser.html_attrs.get("data-theme-pref") == "system"
@@ -70,9 +75,33 @@ def test_pages_share_the_nexapp_shell():
         assert "assets/app.css" in parser.links
         assert "assets/encoder.css" in parser.links
         assert parser.scripts == PAGE_SCRIPTS[name]
-        assert 'href="metrics.html"' in text and 'href="services.html"' in text
-        assert 'href="effects.html"' in text
+        assert 'href="metrics.php"' in text and 'href="services.php"' in text
+        assert 'href="effects.php"' in text
         for class_name in SHELL:
             assert class_name in parser.classes
         assert parser.active_hrefs == [name]
         assert f"v{version}" in text
+
+
+def test_apache_serves_pages_and_php_forwards_admin_actions():
+    for name in PAGES:
+        assert not (WEB / name.replace(".php", ".html")).exists()
+    assert (WEB / "cg" / "bug.html").is_file()
+    feed = (WEB / "includes" / "feed.php").read_text(encoding="utf-8")
+    assert "http://127.0.0.1:8788" in feed
+    assert "NexEncoder" in feed
+    for script in ("config.php", "bars.php", "service.php", "preset.php"):
+        text = (WEB / "admin" / script).read_text(encoding="utf-8")
+        assert "includes/feed.php" in text
+        assert "nexencoder_admin_request" in text
+    site = (ROOT / "config" / "apache-nexencoder.conf").read_text(encoding="utf-8")
+    assert "DocumentRoot /var/lib/nexencoder/www" in site
+    assert "127.0.0.1:8780" in site
+    assert 'ProxyPass /api/ http://127.0.0.1:8788/api/' in site
+    assert 'ProxyPassMatch "^/metrics$"' in site
+    listen = (ROOT / "config" / "apache-nexencoder-listen.conf").read_text(encoding="utf-8")
+    assert "Listen 127.0.0.1:8780" in listen
+    js = (WEB / "assets" / "console.js").read_text(encoding="utf-8")
+    assert "/admin/config.php" in js and "/admin/bars.php" in js
+    assert "/admin/service.php" in (WEB / "assets" / "services.js").read_text(encoding="utf-8")
+    assert "/admin/preset.php" in (WEB / "assets" / "effects.js").read_text(encoding="utf-8")

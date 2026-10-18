@@ -91,7 +91,7 @@
     var destructive = action === "stop" || action === "restart" || action === "disable";
     if (destructive && !window.confirm(action + " " + selected + "?")) return;
     $("action-status").textContent = action + "…";
-    fetch("/api/services/" + encodeURIComponent(selected) + "?action=" + encodeURIComponent(action), {
+    fetch("/admin/service.php?unit=" + encodeURIComponent(selected) + "&action=" + encodeURIComponent(action), {
       method: "POST",
       headers: { "X-Requested-With": "NexEncoder" }
     }).then(function (response) { return response.json().then(function (body) { return { ok: response.ok, body: body }; }); })

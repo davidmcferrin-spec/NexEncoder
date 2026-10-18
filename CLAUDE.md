@@ -20,9 +20,9 @@ to SCTE-35) and shown on a low-latency WebRTC proxy preview via MediaMTX.
  supervisor. `nexencoder.vanc` scans those bytes; SCTE-104 is translated and sent to spliceinject.
 - Encode/mux: FFmpeg libx264 (6–18 Mbps) and AAC, TSDuck `spliceinject` for SCTE-35, then
   `tsp` SRT or FFmpeg HLS. GStreamer is installed for the host; the live path is ffmpeg | tsp.
-- Control plane: `python3 -m nexencoder.console` (stdlib HTTP, vanilla JS). The console has no login and stays on loopback. `python3 -m nexencoder.noc` is a separate bearer-token API for NexNOC (`/api/noc/v1`, contract in `docs/NOC-AGENT-API.md`). Caption and splice
-  notes are posted to `/api/sideband` and the monitor page polls them. Config is saved by the
-  console and applied by restarting `nexencoder-channel@A` / `@B`. Effect recall, normalize,
+- Control plane: Apache and PHP serve the operator pages on `127.0.0.1:8780` (no login, loopback only). `python3 -m nexencoder.console` is the live JSON feed on `127.0.0.1:8788`. Admin saves are PHP scripts that call that feed. `python3 -m nexencoder.noc` is a separate bearer-token API for NexNOC (`/api/noc/v1`, contract in `docs/NOC-AGENT-API.md`). Caption and splice
+  notes are posted to `/api/sideband` and the monitor page polls them. Config is saved through
+  PHP and applied by restarting `nexencoder-channel@A` / `@B`. Effect recall, normalize,
   and bars-with-ident do not restart the channel. Input A is DeckLink Duo 2 (1) or SRT
   listener port 9001; input B is DeckLink Duo 2 (2) or port 9002. Output B listens on 9101.
   Layer −5 is the waiting picture. Layer +5 is bars plus an ident. A tone replaces audio
@@ -42,7 +42,7 @@ to SCTE-35) and shown on a low-latency WebRTC proxy preview via MediaMTX.
 
 ## Layout
 - `nexencoder/` Python package (parsers, translators, control plane)
-- `web/` operator console (NexApp theme; Metrics and Services talk to `nexencoder.console`)
+- `web/` operator console (Apache + PHP, NexApp theme; live data from `nexencoder.console`)
 - `tests/` pytest suite
 - `setup.sh` one-command install (added in this repo, root level)
 - `captures/` real VANC fixtures supplied by the owner

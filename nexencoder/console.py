@@ -1,7 +1,8 @@
-"""Operator console: static UI, /metrics, Prometheus proxy, and service control.
+"""Live data feed for the operator console.
 
-Listens on 127.0.0.1 by default. Service actions are limited to the allowlist
-in nexencoder.services.
+Apache and PHP serve the pages. This process serves /metrics and the /api JSON
+routes those pages and the channel supervisor call. It listens on 127.0.0.1 by
+default. Service actions are limited to the allowlist in nexencoder.services.
 """
 
 from __future__ import annotations
@@ -9,7 +10,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import mimetypes
 import socket
 import subprocess
 import time
@@ -45,20 +45,11 @@ from .vanc import events_from_vanc
 log = logging.getLogger("nexencoder.console")
 
 _ACTION_HEADER = "NexEncoder"
-_TYPES = {
-    ".html": "text/html; charset=utf-8",
-    ".css": "text/css; charset=utf-8",
-    ".js": "text/javascript; charset=utf-8",
-    ".json": "application/json",
-    ".svg": "image/svg+xml",
-    ".txt": "text/plain; charset=utf-8",
-}
 
 
 class Console:
     def __init__(
         self,
-        web_root: Path,
         prometheus_url: str = "http://127.0.0.1:9090",
         unit_runner=None,
         journal_builder=None,
@@ -70,7 +61,6 @@ class Console:
         html_backend=None,
     ) -> None:
         repo = Path(__file__).resolve().parents[1]
-        self.web_root = web_root.resolve()
         self.prometheus_url = prometheus_url
         self.unit_runner = unit_runner
         self.journal_builder = journal_builder or journal_argv
@@ -92,20 +82,6 @@ class Console:
             if seen and now - seen <= 15:
                 row["captions"] = True
         return render_metrics(snapshot_for(config, signals))
-
-    def static_file(self, url_path: str) -> Path | None:
-        if url_path in ("", "/"):
-            url_path = "/index.html"
-        rel = unquote(url_path).lstrip("/")
-        parts = Path(rel).parts
-        if not rel or ".." in parts:
-            return None
-        candidate = (self.web_root / rel).resolve()
-        if candidate != self.web_root and self.web_root not in candidate.parents:
-            return None
-        if candidate.is_file():
-            return candidate
-        return None
 
 
 def _catalog_json() -> list[dict[str, object]]:
@@ -171,7 +147,7 @@ def make_handler(console: Console):
                 elif path == "/api/prom/names":
                     self._prom("names", {})
                 else:
-                    self._static(path)
+                    self._json(404, {"ok": False, "detail": "Not found"})
             except ServiceError as exc:
                 self._json(400, {"ok": False, "detail": str(exc)})
             except ServiceUnavailable as exc:
@@ -407,15 +383,6 @@ def make_handler(console: Console):
             self.wfile.write(b"\n")
             self.wfile.flush()
 
-        def _static(self, path: str) -> None:
-            target = console.static_file(path)
-            if target is None:
-                self._json(404, {"ok": False, "detail": "Not found"})
-                return
-            data = target.read_bytes()
-            media = _TYPES.get(target.suffix.lower()) or mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-            self._bytes(200, media, data)
-
         def _json(self, status: int, payload: dict) -> None:
             self._bytes(status, "application/json; charset=utf-8", json.dumps(payload).encode("utf-8"))
 
@@ -442,14 +409,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="NexEncoder operator console")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8788)
-    parser.add_argument("--web", type=Path, default=repo / "web")
     parser.add_argument("--prometheus", default="http://127.0.0.1:9090")
     parser.add_argument("--config", type=Path, default=repo / "var" / "config.json")
     parser.add_argument("--state", type=Path, default=repo / "var" / "state")
     args = parser.parse_args(argv)
-    console = Console(args.web, args.prometheus, config_path=args.config, state_dir=args.state)
+    console = Console(args.prometheus, config_path=args.config, state_dir=args.state)
     httpd = serve(console, args.host, args.port)
-    log.info("console on http://%s:%s", args.host, args.port)
+    log.info("live feed on http://%s:%s", args.host, args.port)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

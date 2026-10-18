@@ -81,7 +81,7 @@
 
   function saveConfig(config, id) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-    fetch("/api/config", {
+    fetch("/admin/config.php", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -333,13 +333,13 @@
     if (!button) return;
     button.addEventListener("click", function () {
       var enabled = !bars[id];
-      fetch("/api/channels/" + id + "/bars", {
+      fetch("/admin/bars.php", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-Requested-With": "NexEncoder"
         },
-        body: JSON.stringify({ enabled: enabled })
+        body: JSON.stringify({ channel: id, enabled: enabled })
       }).then(function (response) {
         if (!response.ok) throw new Error("bars");
         return response.json();

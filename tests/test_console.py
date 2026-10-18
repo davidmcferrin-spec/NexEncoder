@@ -1,4 +1,4 @@
-"""Console HTTP: metrics, static files, Prometheus proxy, and service actions."""
+"""Live feed HTTP: metrics, Prometheus proxy, and service actions."""
 
 import json
 import subprocess
@@ -9,8 +9,6 @@ from urllib.request import Request, urlopen
 
 from nexencoder.console import Console, serve
 from nexencoder.services import ServiceUnavailable
-
-ROOT_WEB = __import__("pathlib").Path(__file__).resolve().parents[1] / "web"
 
 
 def _start(console: Console):
@@ -28,16 +26,16 @@ def _get(port: int, path: str) -> tuple[int, str]:
         return exc.code, exc.read().decode("utf-8")
 
 
-def test_metrics_and_static_pages():
-    httpd, port = _start(Console(ROOT_WEB, prometheus_url="http://127.0.0.1:9"))
+def test_metrics_feed_does_not_serve_pages():
+    httpd, port = _start(Console(prometheus_url="http://127.0.0.1:9"))
     try:
         status, body = _get(port, "/metrics")
         assert status == 200
         assert "nexencoder_up 1" in body
-        status, html = _get(port, "/metrics.html")
-        assert status == 200 and "Metrics" in html
-        status, html = _get(port, "/services.html")
-        assert status == 200 and "Services" in html
+        status, page = _get(port, "/metrics.php")
+        assert status == 404 and "Not found" in page
+        status, page = _get(port, "/index.php")
+        assert status == 404
         status, missing = _get(port, "/../setup.sh")
         assert status == 404
     finally:
@@ -45,7 +43,7 @@ def test_metrics_and_static_pages():
 
 
 def test_prometheus_down_is_a_json_error():
-    httpd, port = _start(Console(ROOT_WEB, prometheus_url="http://127.0.0.1:9"))
+    httpd, port = _start(Console(prometheus_url="http://127.0.0.1:9"))
     try:
         status, body = _get(port, "/api/prom/query?query=up")
         assert status == 503
@@ -62,7 +60,7 @@ def test_service_action_requires_header_and_allowlist():
         calls.append(args)
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    httpd, port = _start(Console(ROOT_WEB, unit_runner=run))
+    httpd, port = _start(Console(unit_runner=run))
     try:
         request = Request(f"http://127.0.0.1:{port}/api/services/prometheus.service?action=restart", method="POST")
         try:
@@ -106,7 +104,6 @@ def test_config_preview_and_scte_injection(tmp_path):
         sent.append((payload, addr))
 
     httpd, port = _start(Console(
-        ROOT_WEB,
         config_path=tmp_path / "config.json",
         state_dir=tmp_path / "state",
         device_lister=lambda: [{"index": 0, "name": "DeckLink Duo 2 (1)"}],
@@ -161,7 +158,7 @@ def test_journal_stream_and_missing_systemctl():
     def run(args):
         raise ServiceUnavailable("systemctl is not available on this host")
 
-    httpd, port = _start(Console(ROOT_WEB, unit_runner=run, journal_builder=builder))
+    httpd, port = _start(Console(unit_runner=run, journal_builder=builder))
     try:
         status, body = _get(port, "/api/services")
         assert status == 200
@@ -182,7 +179,7 @@ def test_effect_recall_and_normalize_leave_the_pipeline_running(tmp_path):
     state = tmp_path / "state"
     save_config(config, {})
     httpd, port = _start(Console(
-        ROOT_WEB, config_path=config, state_dir=state, html_backend=lambda: "none",
+        config_path=config, state_dir=state, html_backend=lambda: "none",
     ))
     try:
         status, listed = _get(port, "/api/effects/presets")
@@ -211,7 +208,6 @@ def test_effect_recall_and_normalize_leave_the_pipeline_running(tmp_path):
 
 def test_bars_toggle_does_not_rewrite_the_channel_config(tmp_path):
     httpd, port = _start(Console(
-        ROOT_WEB,
         config_path=tmp_path / "config.json",
         state_dir=tmp_path / "state",
     ))

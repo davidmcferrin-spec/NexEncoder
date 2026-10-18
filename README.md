@@ -38,22 +38,23 @@ A bad channel config exits 78 and stays stopped until the config is fixed.
 
 ## Operator console
 
-`web/` is the operator console, served by the control process so the pages can read metrics and manage units:
+Apache and PHP serve the pages from `/var/lib/nexencoder/www` (copied from `web/` by
+`setup.sh`) on `http://127.0.0.1:8780/`. The UI uses the NexApp theme kit and shell.
+`python3 -m nexencoder.console` is the live JSON feed on `127.0.0.1:8788`. Apache proxies
+`/api/` and `/metrics` to that feed. Admin saves go through PHP (`/admin/config.php`,
+`/admin/bars.php`, `/admin/service.php`, `/admin/preset.php`), and those scripts call the feed.
 
-    python3 -m nexencoder.console
-
-It listens on `127.0.0.1:8788`. The UI uses the NexApp theme kit and shell. Raster, DeckLink
-device, bitrate, and SRT/HLS settings are stored by `POST /api/config` (restart the channel
-unit to apply them). Metrics charts CPU, memory, disk, GPU, and uptime from Prometheus, plus
-every `nexencoder_*` series. Measured bitrate and resolution appear after a channel's ffmpeg
-progress file is updating. Services can start, stop, restart, enable, and disable the
-allowlisted units, including `mediamtx` and `nexencoder-channel@A` / `@B`.
+Raster, DeckLink device, bitrate, and SRT/HLS settings are stored by that config save
+(restart the channel unit to apply them). Metrics charts CPU, memory, disk, GPU, and uptime
+from Prometheus, plus every `nexencoder_*` series. Measured bitrate and resolution appear
+after a channel's ffmpeg progress file is updating. Services can start, stop, restart,
+enable, and disable the allowlisted units, including `mediamtx` and `nexencoder-channel@A` / `@B`.
 
 The monitor page plays each input from MediaMTX at `http://<host>:8889/inputA/whep` and
 `inputB`. The channel posts caption and splice notes to `/api/sideband` as VANC arrives.
 `POST /api/channels/A/scte` translates a SCTE-104 message and sends the SCTE-35 section to
-the channel's spliceinject port. The program leaves spliceinject on `127.0.0.1:19001` (A)
-and `:19002` (B).
+the channel's spliceinject port. spliceinject listens on `127.0.0.1:19101` (A)
+and `:19102` (B).
 
 The Effects page grabs a clean still of the selected input every 8 seconds, so a squeeze
 and its CG layers can be lined up on the real picture and saved as a preset. Corner
@@ -80,7 +81,8 @@ in that mode, and an SRT input has no VANC.
 ## NOC agent
 
 NexNOC polls a separate process, `python3 -m nexencoder.noc`. It is not the operator
-console. The console stays on `127.0.0.1:8788` with no login. The agent listens on
+console. The pages stay on `http://127.0.0.1:8780/` with no login. The live feed stays on
+`127.0.0.1:8788`. The agent listens on
 `0.0.0.0:8790` (override in `/etc/nexencoder/noc.json`) and requires a bearer token
 from `/etc/nexencoder/noc.token`. The contract, example payloads, TLS, and the
 install and token-rotation steps are in [docs/NOC-AGENT-API.md](docs/NOC-AGENT-API.md).
@@ -106,7 +108,7 @@ existing token or `noc.json`.
 | `ts.py` | MPEG-TS packetizer and section extractor for SCTE-35 PIDs |
 | `inject.py` | SCTE-104 injector: scenarios to SCTE-35 TS file plus JSON log, with self-check |
 | `metrics.py` | Prometheus exposition for input and output state |
-| `console.py` | Operator console, `/metrics`, config, preview, Prometheus proxy, service control |
+| `console.py` | Live JSON feed: `/metrics`, config, preview, Prometheus proxy, service control |
 | `noc.py` | Token-authenticated NOC agent (`/api/noc/v1`) |
 | `hoststats.py` | CPU, memory, disk, NIC, temperature, and GPU samples for the agent |
 | `srtstats.py` | TSDuck SRT statistics probe and parser |

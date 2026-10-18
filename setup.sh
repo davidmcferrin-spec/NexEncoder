@@ -3,7 +3,8 @@
 #
 # Packages come from APT only: no pip, no venv, no Node, no containers.
 # Installs Python, GStreamer, the local Prometheus stack, a pinned MediaMTX
-# binary, the console, the channel units, and the token-authenticated NOC agent.
+# binary, Apache and PHP for the operator pages, the live-data feed, the channel
+# units, and the token-authenticated NOC agent.
 # FFmpeg 9.0.2 is downloaded and built with DeckLink (--enable-nonfree), OpenSSL
 # (--enable-version3), libx264, and libopus. The DeckLink demuxer is patched to forward VANC captions and
 # SCTE-104 to the channel supervisor. The nexeffect filter is added for the
@@ -54,6 +55,41 @@ if [ "$HOST_INSTALL" -eq 0 ]; then
   log "setup complete (test suite only; host install was skipped)"
   exit 0
 fi
+
+install_operator_pages() {
+  local missing=() pkg phpmod www_tmp
+  for pkg in apache2 libapache2-mod-php php-curl; do
+    dpkg -s "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    log "installing via apt: ${missing[*]}"
+    $SUDO apt-get update -qq
+    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing[@]}"
+  fi
+  $SUDO a2enmod proxy proxy_http rewrite headers >/dev/null
+  phpmod="$(find /etc/apache2/mods-available -maxdepth 1 -name 'php*.load' -printf '%f\n' 2>/dev/null | head -n 1 || true)"
+  phpmod="${phpmod%.load}"
+  if [ -z "$phpmod" ]; then
+    die "Apache PHP module is not installed"
+  fi
+  $SUDO a2enmod "$phpmod" >/dev/null
+  www_tmp="$(mktemp -d)"
+  cp -a web/. "$www_tmp/"
+  $SUDO mkdir -p /var/lib/nexencoder
+  $SUDO rm -rf /var/lib/nexencoder/www
+  $SUDO mv "$www_tmp" /var/lib/nexencoder/www
+  $SUDO find /var/lib/nexencoder/www -type d -exec chmod 755 {} +
+  $SUDO find /var/lib/nexencoder/www -type f -exec chmod 644 {} +
+  $SUDO cp config/apache-nexencoder-listen.conf /etc/apache2/conf-available/nexencoder-listen.conf
+  $SUDO cp config/apache-nexencoder.conf /etc/apache2/sites-available/nexencoder.conf
+  $SUDO a2enconf nexencoder-listen >/dev/null
+  $SUDO a2ensite nexencoder >/dev/null
+  if command -v systemctl >/dev/null 2>&1; then
+    $SUDO systemctl enable apache2
+    $SUDO systemctl restart apache2 || log "WARNING: could not start Apache"
+  fi
+  log "operator pages are http://127.0.0.1:8780/ (Apache and PHP). The live feed stays on 127.0.0.1:8788."
+}
 
 pin_listen() {
   local file="$1" addr="$2" unit="$3"
@@ -340,6 +376,7 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
   fi
 
   $SUDO mkdir -p /var/lib/nexencoder/hls /var/lib/nexencoder/state /etc/nexencoder
+  install_operator_pages
   if [ ! -f /var/lib/nexencoder/config.json ]; then
     $SUDO cp config/encoder.json /var/lib/nexencoder/config.json
     log "installed /var/lib/nexencoder/config.json"
