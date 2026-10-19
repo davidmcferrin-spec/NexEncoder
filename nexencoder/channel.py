@@ -44,7 +44,7 @@ from .livefeed import (
     srt_ingest_argv,
     watch_decklink_signal,
 )
-from .pipeline import VANC_PORT, capture_argv, clock_argv, egress_argv, preview_argv, splice_argv
+from .pipeline import STILL_FD, VANC_PORT, capture_argv, clock_argv, egress_argv, preview_argv, splice_argv
 from .signal import signal_mode
 from .srtstats import atomic_json, redact_secrets, start_srt_stats_reader, tsp_supports_srt_stats
 from .status import parse_ffmpeg_progress, progress_frame
@@ -107,45 +107,107 @@ def _consume_progress(read_fd: int, dest: Path) -> None:
         log.warning("progress reader stopped", exc_info=True)
 
 
-def open_progress_pipe() -> tuple[int, int]:
-    """Return ``(read_fd, 3)`` for ``ffmpeg -progress pipe:3``.
+def open_child_pipe(child_fd: int) -> tuple[int, int]:
+    """Return ``(read_fd, child_fd)`` with the write end on ``child_fd``.
 
-    ``pipe()`` can assign the read end to fd 3. Copying the write end onto
-    fd 3 then closes that read end, the progress write has no reader, and
-    the first progress line kills ffmpeg with SIGPIPE. The read end is
-    moved off fd 3 before the write end is placed there.
+    ``pipe()`` can assign the read end to ``child_fd``. Copying the write
+    end onto that descriptor then closes the read end, and the first write
+    kills the child with SIGPIPE. The read end is moved first.
     """
     read_fd, write_fd = os.pipe()
-    if read_fd == 3:
+    if read_fd == child_fd:
         moved = os.dup(read_fd)
         os.close(read_fd)
         read_fd = moved
-    if write_fd != 3:
-        os.dup2(write_fd, 3)
+    if write_fd != child_fd:
+        os.dup2(write_fd, child_fd)
         os.close(write_fd)
-    return read_fd, 3
+    return read_fd, child_fd
 
 
-def _popen_with_progress(argv: list[str], dest: Path, stderr=None) -> subprocess.Popen:
-    """Run ffmpeg with -progress pipe:3 and mirror the latest block onto dest."""
+def open_progress_pipe() -> tuple[int, int]:
+    """Return ``(read_fd, 3)`` for ``ffmpeg -progress pipe:3``."""
+    return open_child_pipe(3)
+
+
+def pop_jpegs(buf: bytes) -> tuple[list[bytes], bytes]:
+    """Split a concatenated MJPEG stream into complete frames."""
+    frames: list[bytes] = []
+    while True:
+        start = buf.find(b"\xff\xd8")
+        if start < 0:
+            return frames, buf[-1:] if buf else b""
+        end = buf.find(b"\xff\xd9", start + 2)
+        if end < 0:
+            return frames, buf[start:]
+        frames.append(buf[start:end + 2])
+        buf = buf[end + 2:]
+
+
+def write_jpeg_atomic(dest: Path, frame: bytes) -> None:
+    """Replace dest with one JPEG. An OSError leaves the previous file in place."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
+    tmp.write_bytes(frame)
+    tmp.replace(dest)
+
+
+def _consume_still(read_fd: int, dest: Path) -> None:
+    """Write the latest clean still. A failed replace does not close the pipe."""
+    buf = b""
+    try:
+        with os.fdopen(read_fd, "rb") as handle:
+            while True:
+                chunk = handle.read(65536)
+                if not chunk:
+                    break
+                buf += chunk
+                if len(buf) > 8_000_000:
+                    buf = buf[-4_000_000:]
+                frames, buf = pop_jpegs(buf)
+                for frame in frames:
+                    try:
+                        write_jpeg_atomic(dest, frame)
+                    except OSError:
+                        log.warning("still %s was not replaced", dest)
+    except OSError:
+        log.warning("still reader stopped", exc_info=True)
+
+
+def _popen_with_progress(argv: list[str], dest: Path, stderr=None, still_path: Path | None = None) -> subprocess.Popen:
+    """Run ffmpeg with -progress pipe:3 and, for SDI, the still on pipe:4."""
     read_fd, child_fd = open_progress_pipe()
+    still_read = None
+    still_fd = None
+    pass_fds = [child_fd]
+    if still_path is not None:
+        still_read, still_fd = open_child_pipe(STILL_FD)
+        pass_fds.append(still_fd)
     try:
         proc = subprocess.Popen(
-            argv, stdout=subprocess.PIPE, stderr=stderr, pass_fds=(child_fd,), close_fds=True
+            argv, stdout=subprocess.PIPE, stderr=stderr, pass_fds=tuple(pass_fds), close_fds=True
         )
     except Exception:
         os.close(read_fd)
-        try:
-            os.close(child_fd)
-        except OSError:
-            pass
+        if still_read is not None:
+            os.close(still_read)
+        for fd in pass_fds:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         raise
     else:
-        try:
-            os.close(child_fd)
-        except OSError:
-            pass
+        for fd in pass_fds:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
     threading.Thread(target=_consume_progress, args=(read_fd, dest), name="nexencoder-progress", daemon=True).start()
+    if still_path is not None and still_read is not None:
+        threading.Thread(
+            target=_consume_still, args=(still_read, still_path), name="nexencoder-still", daemon=True,
+        ).start()
     return proc
 
 
@@ -371,7 +433,10 @@ def run_channel(
         try:
             if pipe_progress and progress_file is not None and spawn is _spawn:
                 stderr = subprocess.PIPE if manage_live and source == "sdi" else None
-                ffmpeg = _popen_with_progress(capture, progress_file, stderr=stderr)
+                ffmpeg = _popen_with_progress(
+                    capture, progress_file, stderr=stderr,
+                    still_path=Path(still_file) if source == "sdi" and still_file else None,
+                )
             else:
                 extra = {}
                 if manage_live and source == "sdi":

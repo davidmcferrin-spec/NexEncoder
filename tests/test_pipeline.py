@@ -7,7 +7,15 @@ import threading
 import pytest
 
 from nexencoder import scte104 as s104
-from nexencoder.channel import EXIT_CONFIG, open_progress_pipe, progress_target, run_channel, run_preview
+from nexencoder.channel import (
+    EXIT_CONFIG,
+    open_progress_pipe,
+    pop_jpegs,
+    progress_target,
+    run_channel,
+    run_preview,
+    write_jpeg_atomic,
+)
 from nexencoder.channels import save_config
 from nexencoder.pipeline import (
     SRT_STATS_INTERVAL_MS,
@@ -43,6 +51,9 @@ def test_capture_keeps_vanc_and_leaves_the_monitor_off_this_process():
     assert "nextone=hold=" in graph
     assert argv[argv.index("-signal_loss_action") + 1] == "repeat"
     assert argv[argv.index("-a53cc") + 1] == "1"
+    assert "image2pipe" in argv
+    assert "pipe:4" in argv
+    assert not any(str(item).endswith(".jpg") for item in argv)
 
 
 def test_progressive_capture_skips_interlace_flags():
@@ -310,6 +321,19 @@ def test_a_dead_monitor_does_not_restart_the_program(tmp_path):
     )
     assert code == 0
     assert len(program) == 1
+
+
+def test_still_frames_are_split_and_replaced(tmp_path):
+    first = b"\xff\xd8" + b"one" + b"\xff\xd9"
+    second = b"\xff\xd8" + b"two" + b"\xff\xd9"
+    frames, rest = pop_jpegs(first + second + b"\xff\xd8partial")
+    assert frames == [first, second]
+    assert rest == b"\xff\xd8partial"
+    dest = tmp_path / "A.jpg"
+    write_jpeg_atomic(dest, first)
+    write_jpeg_atomic(dest, second)
+    assert dest.read_bytes() == second
+    assert not (tmp_path / "A.jpg.tmp").exists()
 
 
 def test_progress_pipe_keeps_a_reader_when_fd_3_is_free():

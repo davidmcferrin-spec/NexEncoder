@@ -10,6 +10,7 @@ def test_srt_ingest_keeps_pcm_off_the_progress_pipe():
     argv = srt_ingest_argv(9001, "1080i59.94", "/tmp/A.jpg")
     assert "pipe:7" in argv
     assert "pipe:3" not in argv
+    assert "-y" in argv
 
 
 def test_decklink_log_lines_are_the_signal_flag():

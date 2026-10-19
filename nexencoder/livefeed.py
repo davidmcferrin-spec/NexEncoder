@@ -71,7 +71,7 @@ def srt_ingest_argv(port: int, format_name: str, still_path: str, ffmpeg: str = 
         f"scale={PREVIEW_SIZE}:force_original_aspect_ratio=decrease,format=yuv420p[vjpg]"
     )
     return [
-        ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "info",
+        ffmpeg, "-hide_banner", "-y", "-nostdin", "-loglevel", "info",
         "-i", srt_url(port),
         "-filter_complex", graph,
         "-map", "[vraw]", "-f", "rawvideo", "-pix_fmt", "bgra", "pipe:1",

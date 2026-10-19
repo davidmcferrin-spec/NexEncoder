@@ -23,6 +23,9 @@ FEED_ADDR = "239.255.1.1"
 FEED_LOCAL = "127.0.0.1"
 SCTE_PID = 0x1F0
 PREVIEW_SIZE = "960:540"
+# The capture process writes the clean still here. A file output makes
+# FFmpeg exit when the JPEG already exists, which stops the program.
+STILL_FD = 4
 PREVIEW_RTSP = "rtsp://127.0.0.1:8554"
 # Program audio is AAC. The preview path uses Opus and is not this rate.
 AUDIO_BITRATE = "192k"
@@ -143,14 +146,15 @@ def capture_argv(
     """One DeckLink open: H.264/AAC MPEG-TS on stdout.
 
     yuv422p10 keeps the VANC lines so CEA-708 CDPs become A/53 side data.
-    The still JPEG is rewritten every few seconds for the effect builder.
+    The clean still is an MJPEG stream on fd 4. The channel process writes
+    the JPEG, so a failure to replace that file does not stop the encode.
     The monitor publishes from the program feed, not from this process.
     """
     mode = signal_mode(format_name)
     progress = ["-progress", progress_path] if progress_path else []
     state = effect_state or f"/var/lib/nexencoder/state/{channel_id}.effect"
-    still = still_path or f"/var/lib/nexencoder/state/{channel_id}.jpg"
     hold = hold_path or f"/var/lib/nexencoder/state/{channel_id}.wait"
+    del still_path  # The parent writes the JPEG. This process only emits the pipe.
     return [
         ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "warning",
         *progress,
@@ -171,8 +175,8 @@ def capture_argv(
         "pipe:1",
         "-map", "[vstillout]", "-an",
         "-c:v", "mjpeg", "-q:v", "5",
-        "-f", "image2", "-update", "1", "-atomic_writing", "1",
-        still,
+        "-f", "image2pipe",
+        f"pipe:{STILL_FD}",
     ]
 
 
