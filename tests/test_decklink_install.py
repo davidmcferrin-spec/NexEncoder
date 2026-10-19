@@ -91,6 +91,17 @@ def test_setup_downloads_pinned_tsduck():
     assert "TSDuck is checked for, not downloaded" not in script
 
 
+def test_setup_copies_pages_before_the_ffmpeg_check():
+    script = Path("setup.sh").read_text(encoding="utf-8")
+    pages = script.index("  install_operator_pages\n")
+    ffmpeg = script.index("  install_ffmpeg\n")
+    assert pages < ffmpeg
+    assert "ffmpeg_build_ok" in script
+    assert "-decoders | grep" not in script
+    assert "-buildconf | grep" not in script
+    assert "-version | head" not in script
+
+
 def test_setup_installs_chrome_when_wpe_is_not_packaged():
     script = Path("setup.sh").read_text(encoding="utf-8")
     assert "gstreamer1.0-wpe" in script

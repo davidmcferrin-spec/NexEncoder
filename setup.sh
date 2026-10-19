@@ -238,29 +238,39 @@ install_decklink_configure() {
   log "installed /usr/local/bin/decklink-configure and /usr/local/bin/decklink-status"
 }
 
+# Read each listing to the end, then match it. A pipe into grep -q closes
+# early, FFmpeg gets SIGPIPE, and pipefail then rejects a build that is fine.
+ffmpeg_build_ok() {
+  local bin="$1" version="$2" ver conf decoders
+  ver="$("$bin" -version 2>/dev/null || true)"
+  ver="${ver%%$'\n'*}"
+  conf="$("$bin" -buildconf 2>/dev/null || true)"
+  decoders="$("$bin" -hide_banner -decoders 2>/dev/null || true)"
+  [[ "$ver" == *"$version"* ]] \
+    && [[ "$conf" == *"--enable-decklink"* ]] \
+    && [[ "$conf" == *"--enable-nonfree"* ]] \
+    && [[ "$conf" == *"--enable-version3"* ]] \
+    && [[ "$conf" == *"--enable-libx264"* ]] \
+    && [[ "$conf" == *"--enable-libopus"* ]] \
+    && [[ "$decoders" == *" png "* ]] \
+    && [[ -e /usr/local/lib/libavdevice.so ]] \
+    && grep -a -q 'nexencoder VANC forwarder' /usr/local/lib/libavdevice.so \
+    && grep -a -q 'nexencoder effect stack' /usr/local/lib/libavfilter.so
+}
+
 install_ffmpeg() {
   local version=9.0.2
   local url="https://ffmpeg.org/releases/ffmpeg-${version}.tar.xz"
   local sha=8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
   local prefix=/usr/local
   local bin="${prefix}/bin/ffmpeg"
-  local sdk
+  local sdk ver
   if ! sdk="$(decklink_sdk_dir)"; then
     die "DeckLink SDK headers not found. Put Blackmagic_DeckLink_SDK_*.zip in /home/nexstar."
   fi
-  if [ "${NEXENCODER_FORCE_FFMPEG_BUILD:-}" != "1" ] && [ -x "$bin" ]; then
-    local ver conf
-    ver="$("$bin" -version 2>/dev/null | head -n 1 || true)"
-    conf="$("$bin" -buildconf 2>/dev/null || true)"
-    if [[ "$ver" == *"$version"* && "$conf" == *"--enable-decklink"* && "$conf" == *"--enable-nonfree"* \
-      && "$conf" == *"--enable-version3"* && "$conf" == *"--enable-libx264"* && "$conf" == *"--enable-libopus"* ]] \
-      && [ -e /usr/local/lib/libavdevice.so ] \
-      && "$bin" -hide_banner -decoders 2>/dev/null | grep -q ' png ' \
-      && grep -a -q 'nexencoder VANC forwarder' /usr/local/lib/libavdevice.so \
-      && grep -a -q 'nexencoder effect stack' /usr/local/lib/libavfilter.so; then
-      log "FFmpeg ${version} with DeckLink and the VANC forwarder is already installed (${bin})"
-      return 0
-    fi
+  if [ "${NEXENCODER_FORCE_FFMPEG_BUILD:-}" != "1" ] && [ -x "$bin" ] && ffmpeg_build_ok "$bin" "$version"; then
+    log "FFmpeg ${version} with DeckLink and the VANC forwarder is already installed (${bin})"
+    return 0
   fi
   local jobs work src
   jobs="$(nproc 2>/dev/null || echo 2)"
@@ -303,13 +313,11 @@ install_ffmpeg() {
   echo "${prefix}/lib" | $SUDO tee /etc/ld.so.conf.d/nexencoder-ffmpeg.conf >/dev/null
   $SUDO ldconfig
   rm -rf "$work"
-  "$bin" -buildconf | grep -q -- '--enable-decklink'
-  "$bin" -buildconf | grep -q -- '--enable-nonfree'
-  "$bin" -buildconf | grep -q -- '--enable-version3'
-  "$bin" -hide_banner -decoders | grep -q ' png '
-  grep -a -q 'nexencoder VANC forwarder' /usr/local/lib/libavdevice.so
-  grep -a -q 'nexencoder effect stack' /usr/local/lib/libavfilter.so
-  log "installed ${bin} ($("$bin" -version | head -n 1))"
+  if ! ffmpeg_build_ok "$bin" "$version"; then
+    die "FFmpeg ${version} at ${bin} is missing DeckLink, the png decoder, the VANC forwarder, or nexeffect"
+  fi
+  ver="$("$bin" -version 2>/dev/null || true)"
+  log "installed ${bin} (${ver%%$'\n'*})"
 }
 
 install_noc_agent() {
@@ -465,6 +473,9 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
 
   install_decklink
   install_decklink_configure
+  # Pages go out before the FFmpeg build. A failed feature check must not
+  # leave the operator console on the previous copy.
+  install_operator_pages
   install_ffmpeg
   if dpkg -s desktopvideo >/dev/null 2>&1; then
     desktopvideo_version=$(dpkg-query -W -f='${Version}' desktopvideo 2>/dev/null || true)
@@ -480,7 +491,6 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
   $SUDO sysctl --system >/dev/null || log "WARNING: could not raise the UDP receive buffer"
   $SUDO mkdir -p /var/lib/nexencoder/hls /var/lib/nexencoder/state /var/lib/nexencoder/chrome /etc/nexencoder
   $SUDO chmod 0755 /var/lib/nexencoder/chrome
-  install_operator_pages
   if [ ! -f /var/lib/nexencoder/config.json ]; then
     $SUDO cp config/encoder.json /var/lib/nexencoder/config.json
     log "installed /var/lib/nexencoder/config.json"
