@@ -60,7 +60,10 @@ The journal view can be copied for the selected unit. The support bundle, on its
 encoder service (channels, console, NOC, DeckLink setup, MediaMTX, Prometheus, and Apache), plus
 host details such as `lsmod`, `dmesg`, and DeckLink status, for the last 24, 36, 48, or 72 hours,
 or the whole journal. URL credentials and password fields are redacted and the NOC token is left
-out. The Inputs page can restart `nexencoder-channel@A` or `@B` after a save.
+out. Dump and clear, on that same bar, saves the full redacted journal with no size cap, keeps a
+copy at `/var/lib/nexencoder/state/last-journal-dump.zip`, then rotates and vacuums the host
+journal. The hours menu does not apply, and the encoder services keep running. If the vacuum
+fails, the zip is still downloaded. The Inputs page can restart `nexencoder-channel@A` or `@B` after a save.
 
 The monitor page plays each program from MediaMTX at `http://<host>:8889/inputA/whep` and
 `inputB`. That proxy decodes the same local feed SRT sends, so squeeze, graphics, and bars

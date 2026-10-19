@@ -169,10 +169,19 @@
     });
   });
 
+  function setBundleBusy(busy) {
+    $("download-bundle").disabled = busy;
+    $("dump-clear").disabled = busy;
+  }
+
   $("download-bundle").addEventListener("click", function () {
     var hours = $("bundle-hours").value;
     note("bundle-status", true, "Building zip…");
-    fetch("/admin/support.php?hours=" + encodeURIComponent(hours)).then(function (response) {
+    setBundleBusy(true);
+    fetch("/admin/support.php?hours=" + encodeURIComponent(hours), {
+      method: "POST",
+      headers: { "X-Requested-With": "NexEncoder" }
+    }).then(function (response) {
       if (!response.ok) {
         return response.json().then(function (body) {
           throw new Error(body.detail || "Support zip failed");
@@ -184,6 +193,45 @@
       note("bundle-status", true, "Support zip downloaded");
     }).catch(function (err) {
       note("bundle-status", false, err.message || "Support zip failed");
+    }).then(function () {
+      setBundleBusy(false);
+    });
+  });
+
+  $("dump-clear").addEventListener("click", function () {
+    if (!window.confirm("Download the full journal and then delete the host journal? This removes logs for the whole machine. Services keep running.")) {
+      return;
+    }
+    note("bundle-status", true, "Dumping journal…");
+    setBundleBusy(true);
+    fetch("/admin/journal-clear.php", {
+      method: "POST",
+      headers: { "X-Requested-With": "NexEncoder" }
+    }).then(function (response) {
+      var cleared = response.headers.get("X-Journal-Clear") || "";
+      var detail = response.headers.get("X-Journal-Clear-Detail") || "";
+      if (!response.ok) {
+        return response.json().then(function (body) {
+          throw new Error(body.detail || "Journal dump failed");
+        });
+      }
+      var name = fileName(response, "nexencoder-support-all.zip");
+      return response.blob().then(function (blob) {
+        saveBlob(blob, name);
+        return { cleared: cleared, detail: detail };
+      });
+    }).then(function (result) {
+      if (result.cleared === "cleared") {
+        follow(selected);
+        note("bundle-status", true, "Journal dumped and cleared");
+        return;
+      }
+      var why = result.detail ? (": " + result.detail) : "";
+      note("bundle-status", false, "Zip downloaded. Journal was not cleared" + why);
+    }).catch(function (err) {
+      note("bundle-status", false, err.message || "The console did not answer. When a dump was saved, it is last-journal-dump.zip on the encoder.");
+    }).then(function () {
+      setBundleBusy(false);
     });
   });
 

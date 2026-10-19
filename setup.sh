@@ -470,6 +470,10 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
     fi
   fi
 
+  # The monitor's UDP socket is clamped to this. The default (~200 KB) drops
+  # a datagram when deinterlace stalls, and that hole pixelates until the next keyframe.
+  printf 'net.core.rmem_max=8388608\nnet.core.rmem_default=8388608\n' | $SUDO tee /etc/sysctl.d/60-nexencoder.conf >/dev/null
+  $SUDO sysctl --system >/dev/null || log "WARNING: could not raise the UDP receive buffer"
   $SUDO mkdir -p /var/lib/nexencoder/hls /var/lib/nexencoder/state /var/lib/nexencoder/chrome /etc/nexencoder
   $SUDO chmod 0755 /var/lib/nexencoder/chrome
   install_operator_pages

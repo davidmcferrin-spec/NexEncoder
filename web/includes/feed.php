@@ -77,6 +77,55 @@ function nexencoder_get(string $path, int $timeout = 8): array
     return [$status, $type, $payload];
 }
 
+/**
+ * POST to the live feed and return [status, content type, body, response headers].
+ *
+ * Header names are lowercased. Used for downloads that report result headers.
+ *
+ * @return array{0:int,1:string,2:string,3:array<string,string>}
+ */
+function nexencoder_post_download(string $path, int $timeout = 150): array
+{
+    $down = json_encode(['ok' => false, 'detail' => 'The encoder feed is not answering']);
+    $empty = [503, 'application/json; charset=utf-8', $down, []];
+    $url = NEXENCODER_FEED . $path;
+    if (!function_exists('curl_init')) {
+        return $empty;
+    }
+    $ch = curl_init($url);
+    if ($ch === false) {
+        return $empty;
+    }
+    $headers = [];
+    curl_setopt_array($ch, [
+        CURLOPT_CUSTOMREQUEST => 'POST',
+        CURLOPT_HTTPHEADER => ['X-Requested-With: NexEncoder', 'Content-Length: 0'],
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => $timeout,
+        CURLOPT_CONNECTTIMEOUT => 2,
+        CURLOPT_HEADERFUNCTION => static function ($ch, string $header) use (&$headers): int {
+            $line = trim($header);
+            $pos = strpos($line, ':');
+            if ($pos !== false) {
+                $headers[strtolower(substr($line, 0, $pos))] = trim(substr($line, $pos + 1));
+            }
+            return strlen($header);
+        },
+    ]);
+    $payload = curl_exec($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    $type = (string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+    $errno = curl_errno($ch);
+    curl_close($ch);
+    if ($payload === false || $errno !== 0 || $status === 0) {
+        return $empty;
+    }
+    if ($type === '') {
+        $type = 'application/json; charset=utf-8';
+    }
+    return [$status, $type, $payload, $headers];
+}
+
 function nexencoder_get_pass(string $path): never
 {
     [$status, $type, $payload] = nexencoder_get($path);

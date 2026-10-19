@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import shutil
 import socket
@@ -34,6 +35,11 @@ JOURNAL_UNITS: tuple[str, ...] = (
 )
 MAX_JOURNAL_BYTES = 8 * 1024 * 1024
 DMESG_TAIL = 400
+DUMP_FILENAME = "last-journal-dump.zip"
+_CLEAR_COMMANDS: tuple[list[str], ...] = (
+    ["journalctl", "--rotate"],
+    ["journalctl", "--vacuum-time=1s"],
+)
 HOST_COMMANDS: tuple[tuple[str, list[str]], ...] = (
     ("uname.txt", ["uname", "-a"]),
     ("uptime.txt", ["uptime"]),
@@ -102,11 +108,18 @@ def _default_runner(argv: list[str]) -> tuple[int, str, str]:
     return proc.returncode, proc.stdout or "", proc.stderr or ""
 
 
-def _cap(text: str) -> str:
-    raw = text.encode("utf-8", "replace")
-    if len(raw) <= MAX_JOURNAL_BYTES:
+def _cap(text: str, limit: int | None = MAX_JOURNAL_BYTES) -> str:
+    if limit is None:
         return text
-    return raw[:MAX_JOURNAL_BYTES].decode("utf-8", "ignore") + "\n... truncated\n"
+    raw = text.encode("utf-8", "replace")
+    if len(raw) <= limit:
+        return text
+    return raw[:limit].decode("utf-8", "ignore") + "\n... truncated\n"
+
+
+def _one_line(text: str) -> str:
+    cleaned = "".join(ch for ch in " ".join(text.split()) if 32 <= ord(ch) <= 126)
+    return cleaned[:180]
 
 
 def _host_label(name: str) -> str:
@@ -137,6 +150,7 @@ def build_bundle(
     runner: Runner | None = None,
     hostname: str = "",
     now: datetime | None = None,
+    journal_limit: int | None = MAX_JOURNAL_BYTES,
 ) -> tuple[str, bytes]:
     window = parse_hours(hours)
     run = runner or _default_runner
@@ -168,7 +182,7 @@ def build_bundle(
             text = stdout if stdout.strip() else (stderr or f"journalctl exited {code}\n")
             if code != 0 and stdout.strip():
                 text = text + "\n" + (stderr or f"journalctl exited {code}\n")
-            archive.writestr(f"journal/{unit}.log", _cap(redact(text)))
+            archive.writestr(f"journal/{unit}.log", _cap(redact(text), journal_limit))
         readme = (
             "NexEncoder support bundle\n"
             f"Window: {'all retained journal lines' if window is None else f'last {window} hours'}\n"
@@ -185,3 +199,48 @@ def build_bundle(
             "generated": stamp,
         }, indent=2) + "\n")
     return filename, buffer.getvalue()
+
+
+def _store_dump(state_dir: Path, data: bytes) -> Path:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    target = state_dir / DUMP_FILENAME
+    temporary = state_dir / f".{DUMP_FILENAME}.part"
+    temporary.write_bytes(data)
+    os.replace(temporary, target)
+    return target
+
+
+def clear_journal(runner: Runner | None = None) -> str:
+    """Rotate the host journal and drop archived files. Empty string means cleared."""
+    run = runner or _default_runner
+    for argv in _CLEAR_COMMANDS:
+        code, stdout, stderr = run(argv)
+        if code != 0:
+            detail = _one_line(stderr or stdout)
+            return detail or f"{' '.join(argv)} exited {code}"
+    return ""
+
+
+def dump_and_clear(
+    *,
+    state_dir: Path,
+    config_path: Path | None = None,
+    runner: Runner | None = None,
+    hostname: str = "",
+    now: datetime | None = None,
+) -> tuple[str, bytes, str]:
+    """Save a full redacted journal zip, then vacuum. The third value is empty when cleared.
+
+    The zip is written under state_dir before any journal file is removed. A failed
+    copy leaves the journal alone. A failed vacuum still returns the zip.
+    """
+    filename, data = build_bundle(
+        "all",
+        config_path=config_path,
+        runner=runner,
+        hostname=hostname,
+        now=now,
+        journal_limit=None,
+    )
+    _store_dump(state_dir, data)
+    return filename, data, clear_journal(runner)

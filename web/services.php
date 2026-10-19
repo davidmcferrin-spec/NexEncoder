@@ -49,7 +49,7 @@ header('X-Content-Type-Options: nosniff');
     <div class="page-head">
       <div>
         <h1>Services</h1>
-        <p class="lead">Start, stop, restart, enable, and disable the encoder units. The journal follows the selected unit, and that view can be copied.</p>
+        <p class="lead">Start, stop, restart, enable, and disable the encoder units. The journal follows the selected unit, and that view can be copied. Dump and clear saves the full journal, then deletes the host journal.</p>
       </div>
     </div>
     <div class="support-bundle-bar">
@@ -62,6 +62,7 @@ header('X-Content-Type-Options: nosniff');
         <option value="all">All</option>
       </select>
       <button type="button" class="btn" id="download-bundle" title="Download journals, host details, and config as a zip">Download zip</button>
+      <button type="button" class="btn btn-danger" id="dump-clear" title="Save the full journal, then delete the host journal">Dump and clear</button>
       <span id="bundle-status" class="muted"></span>
     </div>
     <div class="banner" id="svc-banner" hidden></div>

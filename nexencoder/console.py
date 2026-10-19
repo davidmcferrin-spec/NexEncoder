@@ -45,7 +45,7 @@ from .services import (
     list_units,
     normalize_unit,
 )
-from .support import build_bundle
+from .support import DUMP_FILENAME, build_bundle, dump_and_clear
 from .sideband import Sideband
 from .status import signals_from_progress
 from .vanc import events_from_vanc
@@ -202,6 +202,8 @@ def make_handler(console: Console):
                     self._bars(unquote(parts[2]), body)
                 elif len(parts) == 4 and parts[0] == "api" and parts[1] == "channels" and parts[3] == "detect":
                     self._detect(unquote(parts[2]))
+                elif parts == ["api", "journal", "clear"]:
+                    self._journal_clear()
                 else:
                     self._json(404, {"ok": False, "detail": "Unknown action"})
             except ServiceError as exc:
@@ -373,6 +375,27 @@ def make_handler(console: Console):
                 return
             self._bytes(200, "application/zip", data, filename)
 
+        def _journal_clear(self) -> None:
+            try:
+                filename, data, detail = dump_and_clear(
+                    state_dir=console.state_dir,
+                    config_path=console.config_path,
+                    runner=console.support_runner,
+                )
+            except OSError as exc:
+                log.warning("journal dump was not stored: %s", exc)
+                self._json(500, {"ok": False, "detail": "Could not store the journal dump"})
+                return
+            kept = console.state_dir / DUMP_FILENAME
+            if detail:
+                log.warning("journal dump stored at %s; clear failed: %s", kept, detail)
+            else:
+                log.info("journal dump stored at %s and the host journal was cleared", kept)
+            headers = {"X-Journal-Clear": "failed" if detail else "cleared"}
+            if detail:
+                headers["X-Journal-Clear-Detail"] = detail
+            self._bytes(200, "application/zip", data, filename, headers)
+
         def _journal(self, unit: str) -> None:
             try:
                 argv = console.journal_builder(normalize_unit(unit), True)
@@ -428,11 +451,20 @@ def make_handler(console: Console):
         def _json(self, status: int, payload: dict) -> None:
             self._bytes(status, "application/json; charset=utf-8", json.dumps(payload).encode("utf-8"))
 
-        def _bytes(self, status: int, content_type: str, body: bytes, filename: str | None = None) -> None:
+        def _bytes(
+            self,
+            status: int,
+            content_type: str,
+            body: bytes,
+            filename: str | None = None,
+            headers: dict[str, str] | None = None,
+        ) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             if filename:
                 self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            for key, value in (headers or {}).items():
+                self.send_header(key, value)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from nexencoder.support import build_bundle, parse_hours, redact
+from nexencoder.support import DUMP_FILENAME, MAX_JOURNAL_BYTES, build_bundle, dump_and_clear, parse_hours, redact
 
 
 def test_parse_hours_accepts_the_operator_windows():
@@ -78,3 +78,93 @@ def test_bundle_uses_the_window_and_leaves_the_token_out(tmp_path):
     journals = [argv for argv in seen if argv and argv[0] == "journalctl"]
     assert journals
     assert all("--since" not in argv for argv in journals)
+
+
+def _quiet(argv):
+    if argv[:2] == ["journalctl", "-u"] and "nexencoder-channel@A.service" in argv:
+        return 0, "A" * (MAX_JOURNAL_BYTES + 32), ""
+    return 0, "ok\n", ""
+
+
+def test_bundle_still_caps_each_journal():
+    _, data = build_bundle("all", runner=_quiet, hostname="box")
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        log = archive.read("journal/nexencoder-channel@A.service.log")
+    assert b"... truncated" in log
+    assert len(log) < MAX_JOURNAL_BYTES + 64
+
+
+def test_dump_stores_the_full_journal_before_it_clears(tmp_path):
+    state = tmp_path / "state"
+    seen: list[list[str]] = []
+
+    def run(argv):
+        seen.append(list(argv))
+        if argv == ["journalctl", "--rotate"]:
+            assert (state / DUMP_FILENAME).is_file()
+            return 0, "", ""
+        if argv == ["journalctl", "--vacuum-time=1s"]:
+            return 0, "Vacuuming done\n", ""
+        return _quiet(argv)
+
+    name, data, detail = dump_and_clear(
+        state_dir=state,
+        runner=run,
+        hostname="nex encoder",
+        now=datetime(2026, 10, 18, 23, 0, tzinfo=timezone.utc),
+    )
+    assert detail == ""
+    assert name == "nexencoder-support-20261018T230000Z-nex-encoder-all.zip"
+    assert (state / DUMP_FILENAME).read_bytes() == data
+    assert not (state / f".{DUMP_FILENAME}.part").exists()
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        log = archive.read("journal/nexencoder-channel@A.service.log")
+    assert b"... truncated" not in log
+    assert len(log) > MAX_JOURNAL_BYTES
+    rotate_at = seen.index(["journalctl", "--rotate"])
+    vacuum_at = seen.index(["journalctl", "--vacuum-time=1s"])
+    journal_at = max(i for i, argv in enumerate(seen) if argv[:2] == ["journalctl", "-u"])
+    assert journal_at < rotate_at < vacuum_at
+
+
+def test_dump_skips_vacuum_when_rotate_fails(tmp_path):
+    seen: list[list[str]] = []
+
+    def run(argv):
+        seen.append(list(argv))
+        if argv == ["journalctl", "--rotate"]:
+            return 1, "", "rotate refused\nbecause busy"
+        return 0, "ok\n", ""
+
+    _, data, detail = dump_and_clear(state_dir=tmp_path / "state", runner=run, hostname="box")
+    assert detail == "rotate refused because busy"
+    assert data.startswith(b"PK")
+    assert ["journalctl", "--vacuum-time=1s"] not in seen
+    assert (tmp_path / "state" / DUMP_FILENAME).is_file()
+
+
+def test_dump_returns_the_zip_when_vacuum_fails(tmp_path):
+    def run(argv):
+        if argv == ["journalctl", "--vacuum-time=1s"]:
+            return 1, "", "vacuum refused"
+        return 0, "ok\n", ""
+
+    _, data, detail = dump_and_clear(state_dir=tmp_path / "state", runner=run, hostname="box")
+    assert detail == "vacuum refused"
+    assert data.startswith(b"PK")
+    assert (tmp_path / "state" / DUMP_FILENAME).read_bytes() == data
+
+
+def test_dump_does_not_clear_when_the_copy_cannot_be_stored(tmp_path):
+    blocked = tmp_path / "blocked"
+    blocked.write_text("x", encoding="utf-8")
+    seen: list[list[str]] = []
+
+    def run(argv):
+        seen.append(list(argv))
+        return 0, "ok\n", ""
+
+    with pytest.raises(OSError):
+        dump_and_clear(state_dir=blocked / "state", runner=run, hostname="box")
+    assert ["journalctl", "--rotate"] not in seen
+    assert ["journalctl", "--vacuum-time=1s"] not in seen

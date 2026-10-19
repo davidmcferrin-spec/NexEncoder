@@ -90,7 +90,7 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     feed = (WEB / "includes" / "feed.php").read_text(encoding="utf-8")
     assert "http://127.0.0.1:8788" in feed
     assert "NexEncoder" in feed
-    for script in ("config.php", "bars.php", "service.php", "preset.php", "detect.php", "support.php"):
+    for script in ("config.php", "bars.php", "service.php", "preset.php", "detect.php", "support.php", "journal-clear.php"):
         text = (WEB / "admin" / script).read_text(encoding="utf-8")
         assert "includes/feed.php" in text
         assert "nexencoder_admin_request" in text
@@ -108,8 +108,14 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     assert "/admin/service.php" in services and "/admin/services.php" in services
     assert "/live/log.php" in services
     assert "/admin/journal.php" not in services and "/admin/support.php" in services
+    assert "/admin/journal-clear.php" in services
+    assert "X-Journal-Clear" in services
+    assert "Journal dumped and cleared" in services
+    assert "delete the host journal" in services
+    assert 'method: "POST"' in services
     page = (WEB / "services.php").read_text(encoding="utf-8")
     assert 'id="copy-journal"' in page and 'id="download-bundle"' in page
+    assert 'id="dump-clear"' in page and "Dump and clear" in page
     assert 'class="support-bundle-bar"' in page
     assert page.index("support-bundle-bar") < page.index('id="unit-list"')
     assert 'id="dump-journal"' not in page

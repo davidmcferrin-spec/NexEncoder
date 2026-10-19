@@ -45,7 +45,16 @@ from .livefeed import (
     srt_ingest_argv,
     watch_decklink_signal,
 )
-from .pipeline import STILL_FD, VANC_PORT, capture_argv, clock_argv, egress_argv, preview_argv, splice_argv
+from .pipeline import (
+    FEED_RCVBUF,
+    STILL_FD,
+    VANC_PORT,
+    capture_argv,
+    clock_argv,
+    egress_argv,
+    preview_argv,
+    splice_argv,
+)
 from .signal import signal_mode
 from .srtstats import atomic_json, redact_secrets, start_srt_stats_reader, tsp_supports_srt_stats
 from .status import parse_ffmpeg_progress, progress_frame
@@ -63,6 +72,25 @@ STILL_PIPE_BYTES = 1 << 20
 def _spawn(argv: list[str], **kwargs) -> subprocess.Popen:
     log.info("start %s", redact_secrets(" ".join(argv)))
     return subprocess.Popen(argv, **kwargs)
+
+
+def ensure_udp_receive_buffer(proc_path: Path | None = None, size: int = FEED_RCVBUF) -> None:
+    """Raise the kernel UDP receive cap so the monitor's buffer_size is applied.
+
+    Linux clamps SO_RCVBUF to rmem_max. The URL value does nothing while that
+    cap stays at the default, and a dropped datagram pixelates until the next keyframe.
+    """
+    path = proc_path or Path("/proc/sys/net/core/rmem_max")
+    try:
+        current = int(path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return
+    if current >= size:
+        return
+    try:
+        path.write_text(f"{size}\n", encoding="utf-8")
+    except OSError:
+        log.warning("UDP receive buffer stays at %s bytes", current)
 
 
 def sd_notify(message: str) -> None:
@@ -613,6 +641,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hls", type=Path, default=Path(os.environ.get("NEXENCODER_HLS", "/var/lib/nexencoder/hls")))
     parser.add_argument("--state", type=Path, default=Path(os.environ.get("NEXENCODER_STATE", "/var/lib/nexencoder/state")))
     args = parser.parse_args(argv)
+    if os.name == "posix":
+        ensure_udp_receive_buffer()
     return run_channel(
         args.id, args.config, args.hls, args.state,
         pipe_progress=(os.name == "posix"),

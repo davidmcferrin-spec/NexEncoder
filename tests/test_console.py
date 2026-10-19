@@ -205,6 +205,100 @@ def test_support_zip_is_one_system_bundle(tmp_path):
         httpd.shutdown()
 
 
+def _post_raw(port: int, path: str):
+    request = Request(
+        f"http://127.0.0.1:{port}{path}",
+        method="POST",
+        headers={"X-Requested-With": "NexEncoder"},
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            return response.status, response.headers, response.read()
+    except HTTPError as exc:
+        return exc.code, exc.headers, exc.read()
+
+
+def test_journal_clear_stores_the_zip_then_vacuums(tmp_path):
+    from nexencoder.channels import save_config
+    from nexencoder.support import DUMP_FILENAME
+
+    config = tmp_path / "config.json"
+    state = tmp_path / "state"
+    save_config(config, {})
+    calls = []
+
+    def support(argv):
+        calls.append(list(argv))
+        if argv == ["journalctl", "--rotate"]:
+            assert (state / DUMP_FILENAME).is_file()
+        if argv and argv[0] == "journalctl" and "-u" in argv:
+            return 0, "cleared-line srt://user:pw@host\n", ""
+        return 0, "ok\n", ""
+
+    httpd, port = _start(Console(config_path=config, state_dir=state, support_runner=support))
+    try:
+        denied = Request(f"http://127.0.0.1:{port}/api/journal/clear", method="POST")
+        try:
+            urlopen(denied, timeout=3)
+            status = 200
+        except HTTPError as exc:
+            status = exc.code
+        assert status == 403
+        assert calls == []
+        status, missing = _get(port, "/api/journal/clear")
+        assert status == 404
+        status, headers, payload = _post_raw(port, "/api/journal/clear")
+        assert status == 200
+        assert payload.startswith(b"PK")
+        assert headers["X-Journal-Clear"] == "cleared"
+        assert "all.zip" in headers["Content-Disposition"]
+        assert (state / DUMP_FILENAME).read_bytes() == payload
+        assert b"pw@" not in payload
+        assert calls[-2] == ["journalctl", "--rotate"]
+        assert calls[-1] == ["journalctl", "--vacuum-time=1s"]
+    finally:
+        httpd.shutdown()
+
+
+def test_journal_clear_returns_the_zip_when_vacuum_fails(tmp_path):
+    state = tmp_path / "state"
+
+    def support(argv):
+        if argv == ["journalctl", "--vacuum-time=1s"]:
+            return 1, "", "vacuum refused"
+        return 0, "ok\n", ""
+
+    httpd, port = _start(Console(state_dir=state, support_runner=support))
+    try:
+        status, headers, payload = _post_raw(port, "/api/journal/clear")
+        assert status == 200 and payload.startswith(b"PK")
+        assert headers["X-Journal-Clear"] == "failed"
+        assert headers["X-Journal-Clear-Detail"] == "vacuum refused"
+        assert (state / "last-journal-dump.zip").read_bytes() == payload
+    finally:
+        httpd.shutdown()
+
+
+def test_journal_clear_does_not_vacuum_when_the_copy_cannot_be_stored(tmp_path):
+    blocked = tmp_path / "blocked"
+    blocked.write_text("x", encoding="utf-8")
+    calls = []
+
+    def support(argv):
+        calls.append(list(argv))
+        return 0, "ok\n", ""
+
+    httpd, port = _start(Console(state_dir=blocked, support_runner=support))
+    try:
+        status, _, payload = _post_raw(port, "/api/journal/clear")
+        assert status == 500
+        assert "Could not store" in payload.decode("utf-8")
+        assert ["journalctl", "--rotate"] not in calls
+        assert ["journalctl", "--vacuum-time=1s"] not in calls
+    finally:
+        httpd.shutdown()
+
+
 def test_effect_recall_and_normalize_leave_the_pipeline_running(tmp_path):
     from nexencoder.channels import save_config
 

@@ -21,6 +21,10 @@ VANC_PORT = {"A": 19201, "B": 19202}
 # multicast group, so the program feed is this group on the loopback interface.
 FEED_ADDR = "239.255.1.1"
 FEED_LOCAL = "127.0.0.1"
+# Kernel receive buffer for each reader of the program feed. The default
+# (~200 KB) drops a datagram when the monitor deinterlaces, and that hole
+# pixelates until the next keyframe. About 3.5 s at 18 Mbps.
+FEED_RCVBUF = 8 * 1024 * 1024
 SCTE_PID = 0x1F0
 PREVIEW_SIZE = "960:540"
 # The capture process writes the clean still here. A file output makes
@@ -48,11 +52,15 @@ def preview_rtsp(channel_id: str) -> str:
 
 
 def feed_url(channel_id: str) -> str:
-    """Multicast program feed. SRT, HLS, and the monitor each join it."""
+    """Multicast program feed. SRT, HLS, and the monitor each join it.
+
+    ``buffer_size`` is the kernel socket buffer. ``fifo_size`` is FFmpeg's
+    own queue and does not stop the kernel from dropping datagrams first.
+    """
     feed = FEED_PORT[channel_id]
     return (
         f"udp://{FEED_ADDR}:{feed}?localaddr={FEED_LOCAL}"
-        f"&reuse=1&fifo_size=2000000&overrun_nonfatal=1"
+        f"&reuse=1&fifo_size=2000000&overrun_nonfatal=1&buffer_size={FEED_RCVBUF}"
     )
 
 

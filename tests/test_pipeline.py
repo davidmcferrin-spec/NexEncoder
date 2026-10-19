@@ -11,6 +11,7 @@ from nexencoder.channel import (
     EXIT_CONFIG,
     _consume_still,
     clear_progress,
+    ensure_udp_receive_buffer,
     note_progress,
     open_progress_pipe,
     pop_jpegs,
@@ -91,7 +92,9 @@ def test_srt_input_keeps_an_encode_clock_without_a_still():
 
 def test_preview_decodes_the_program_feed():
     argv = preview_argv("A")
-    assert argv[argv.index("-i") + 1].startswith("udp://239.255.1.1:19001?localaddr=127.0.0.1")
+    preview_in = argv[argv.index("-i") + 1]
+    assert preview_in.startswith("udp://239.255.1.1:19001?localaddr=127.0.0.1")
+    assert "buffer_size=8388608" in preview_in
     assert "nexeffect" not in " ".join(argv)
     assert "decklink" not in argv
     assert argv[argv.index("-f") + 1] == "mpegts"
@@ -376,6 +379,17 @@ def test_leftover_progress_does_not_kill_the_new_run(tmp_path):
     assert len(starts) == 1
     assert progress.read_text(encoding="utf-8") != "frame=944\nprogress=continue\n"
     assert sum(1 for delay in pauses if delay == 1) >= 12
+
+
+def test_udp_receive_buffer_is_raised_when_the_kernel_limit_is_low(tmp_path):
+    path = tmp_path / "rmem_max"
+    path.write_text("212992\n", encoding="utf-8")
+    ensure_udp_receive_buffer(path)
+    assert int(path.read_text(encoding="utf-8")) == 8388608
+    path.write_text("16777216\n", encoding="utf-8")
+    ensure_udp_receive_buffer(path)
+    assert int(path.read_text(encoding="utf-8")) == 16777216
+    ensure_udp_receive_buffer(tmp_path / "missing")
 
 
 def test_clear_progress_drops_the_previous_count(tmp_path):
