@@ -112,6 +112,14 @@ def _paeth(left: int, up: int, up_left: int) -> int:
     return up_left
 
 
+def png_size(png: bytes) -> tuple[int, int]:
+    """Width and height from the IHDR, or (0, 0) when it is not a PNG."""
+    if not png.startswith(_PNG_SIG) or len(png) < 24 or png[12:16] != b"IHDR":
+        return 0, 0
+    width, height = struct.unpack_from(">II", png, 16)
+    return int(width), int(height)
+
+
 def decode_png_bgra(png: bytes) -> bytes:
     """Turn an 8-bit RGB or RGBA PNG into straight BGRA. The alpha channel is kept."""
     if not png.startswith(_PNG_SIG):
@@ -709,6 +717,24 @@ def _attach_page(call, holder: "_Running", url: str, wait: float = PAGE_WAIT) ->
     return session_id, ""
 
 
+def _prepare_page(call, session_id: str, width: int, height: int) -> None:
+    """Size the viewport to the slot and keep the page background clear.
+
+    ``--window-size`` is the outer window. New headless Chrome takes its tab
+    strip and toolbar out of that, so a 1920x1080 window paints 1920x993 and
+    every frame missed the slot. The metrics override sets the viewport itself.
+    """
+    call("Emulation.setDeviceMetricsOverride", {
+        "width": width,
+        "height": height,
+        "deviceScaleFactor": 1,
+        "mobile": False,
+    }, session_id)
+    call("Emulation.setDefaultBackgroundColorOverride", {
+        "color": {"r": 0, "g": 0, "b": 0, "a": 0},
+    }, session_id)
+
+
 def run_chromium_feeder(
     browser: str,
     url: str,
@@ -812,9 +838,8 @@ def run_chromium_feeder(
                 f"({reason}; browser {alive})"
             )
         log.info("CG page %s is up after %.1fs", url, time.monotonic() - started)
-        call("Emulation.setDefaultBackgroundColorOverride", {
-            "color": {"r": 0, "g": 0, "b": 0, "a": 0},
-        }, session_id)
+        _prepare_page(call, session_id, writer.width, writer.height)
+        wrong_size_noted = False
         while not holder.stop.is_set():
             started = time.monotonic()
             result = call("Page.captureScreenshot", {
@@ -824,15 +849,21 @@ def run_chromium_feeder(
             }, session_id)
             frame = result.get("data")
             if isinstance(frame, str):
+                png = base64.b64decode(frame)
                 try:
-                    pixels = decode_png_bgra(base64.b64decode(frame))
+                    pixels = decode_png_bgra(png)
                 except (ValueError, zlib.error) as exc:
                     log.warning("HTML frame dropped: %s", exc)
                 else:
                     if len(pixels) == writer.nbytes:
                         writer.write(pixels)
-                    else:
-                        log.warning("HTML frame is %s bytes, slot wants %s", len(pixels), writer.nbytes)
+                    elif not wrong_size_noted:
+                        wrong_size_noted = True
+                        got_w, got_h = png_size(png)
+                        log.warning(
+                            "HTML frames are %sx%s but the slot is %sx%s; they are dropped until Chrome resizes",
+                            got_w, got_h, writer.width, writer.height,
+                        )
             # Ten frames a second is enough for a bug. A tighter loop keeps
             # Chrome busy and the DeckLink capture overruns.
             remain = max(0.05, (1 / 10) - (time.monotonic() - started))

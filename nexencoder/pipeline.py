@@ -30,6 +30,16 @@ PREVIEW_SIZE = "960:540"
 # The capture process writes the clean still here. A file output makes
 # FFmpeg exit when the JPEG already exists, which stops the program.
 STILL_FD = 4
+# The argv builders name child pipes by these numbers. The spawner replaces
+# each ``pipe:N`` with the descriptor it really opened, so the parent never
+# dup2()s onto a number another thread may be using.
+PROGRESS_FD = 3
+
+
+def bind_pipe_fds(argv: list[str], fds: dict[int, int]) -> list[str]:
+    """Return argv with ``pipe:<placeholder>`` swapped for ``pipe:<real fd>``."""
+    names = {f"pipe:{placeholder}": f"pipe:{real}" for placeholder, real in fds.items()}
+    return [names.get(item, item) for item in argv]
 PREVIEW_RTSP = "rtsp://127.0.0.1:8554"
 # Program audio is AAC. The preview path uses Opus and is not this rate.
 AUDIO_BITRATE = "192k"

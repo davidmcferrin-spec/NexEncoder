@@ -27,6 +27,7 @@ from nexencoder.channels import save_config
 from nexencoder.pipeline import (
     SRT_STATS_INTERVAL_MS,
     SRT_STATS_PREFIX,
+    bind_pipe_fds,
     capture_argv,
     clock_argv,
     egress_argv,
@@ -469,7 +470,10 @@ def test_still_frames_are_split_and_replaced(tmp_path):
     assert not (tmp_path / "A.jpg.tmp").exists()
 
 
-def test_progress_pipe_keeps_a_reader_when_fd_3_is_free():
+def test_progress_pipe_leaves_other_threads_descriptors_alone():
+    """A devtools socket on fd 3 must survive the capture spawning."""
+    import socket
+
     saved = None
     try:
         saved = os.dup(3)
@@ -477,18 +481,32 @@ def test_progress_pipe_keeps_a_reader_when_fd_3_is_free():
         saved = None
     else:
         os.close(3)
-    read_fd, child_fd = open_progress_pipe()
+    keeper = socket.socket()
     try:
-        assert child_fd == 3
-        assert read_fd != 3
-        os.write(child_fd, b"frame=4\n")
-        assert os.read(read_fd, 16) == b"frame=4\n"
+        read_fd, child_fd = open_progress_pipe()
+        try:
+            assert child_fd != keeper.fileno()
+            assert read_fd != keeper.fileno()
+            os.write(child_fd, b"frame=4\n")
+            assert os.read(read_fd, 16) == b"frame=4\n"
+            # The socket is still open and still usable.
+            keeper.setblocking(False)
+            assert keeper.fileno() >= 0
+        finally:
+            os.close(read_fd)
+            os.close(child_fd)
     finally:
-        os.close(read_fd)
-        os.close(child_fd)
+        keeper.close()
         if saved is not None:
             os.dup2(saved, 3)
             os.close(saved)
+
+
+def test_pipe_names_are_bound_to_the_real_descriptors():
+    argv = ["ffmpeg", "-progress", "pipe:3", "-f", "mjpeg", "pipe:4", "-f", "mpegts", "pipe:1"]
+    bound = bind_pipe_fds(argv, {3: 17, 4: 23})
+    assert bound == ["ffmpeg", "-progress", "pipe:17", "-f", "mjpeg", "pipe:23", "-f", "mpegts", "pipe:1"]
+    assert bind_pipe_fds(argv, {}) == argv
 
 
 def test_progress_target_uses_a_pipe_on_the_service():

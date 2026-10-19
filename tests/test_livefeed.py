@@ -3,7 +3,14 @@
 import pytest
 
 from nexencoder.effects import read_flag, render_wait, write_flag, write_wait
-from nexencoder.livefeed import check_loop_file, signal_from_decklink_log, srt_ingest_argv
+from nexencoder.livefeed import (
+    AUDIO_FD,
+    PcmRing,
+    _run_srt_once,
+    check_loop_file,
+    signal_from_decklink_log,
+    srt_ingest_argv,
+)
 
 
 def test_srt_ingest_keeps_pcm_off_the_progress_pipe():
@@ -11,6 +18,46 @@ def test_srt_ingest_keeps_pcm_off_the_progress_pipe():
     assert "pipe:7" in argv
     assert "pipe:3" not in argv
     assert "-y" in argv
+
+
+def test_srt_ingest_hands_ffmpeg_the_pipe_it_really_opened(tmp_path):
+    import io
+    import os
+    import threading
+
+    from nexencoder.cgfeed import SlotWriter
+
+    seen = {}
+
+    class FakeProc:
+        stdout = io.BytesIO(b"")
+        stderr = io.BytesIO(b"")
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+    def spawn(argv, **kwargs):
+        seen["argv"] = argv
+        seen["pass_fds"] = kwargs["pass_fds"]
+        return FakeProc()
+
+    argv = srt_ingest_argv(9001, "1080i59.94", str(tmp_path / "A.jpg"))
+    _run_srt_once(
+        argv, SlotWriter(tmp_path / "v.nxcg", 4, 2), PcmRing(tmp_path / "a.pcm"),
+        tmp_path / "signal", threading.Event(), spawn,
+    )
+    (write_fd,) = seen["pass_fds"]
+    assert f"pipe:{write_fd}" in seen["argv"]
+    assert f"pipe:{AUDIO_FD}" not in seen["argv"] or write_fd == AUDIO_FD
+    assert seen["argv"].index(f"pipe:{write_fd}") == argv.index(f"pipe:{AUDIO_FD}")
+    # The parent closed its copy of the write end after the spawn.
+    try:
+        os.fstat(write_fd)
+    except OSError:
+        pass
+    else:
+        raise AssertionError("the write end stayed open in the parent")
 
 
 def test_decklink_log_lines_are_the_signal_flag():

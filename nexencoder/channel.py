@@ -51,7 +51,9 @@ from .pipeline import (
     FEED_LOCAL,
     FEED_PORT,
     FEED_RCVBUF,
+    PROGRESS_FD,
     STILL_FD,
+    bind_pipe_fds,
     VANC_PORT,
     capture_argv,
     clock_argv,
@@ -173,27 +175,20 @@ def _consume_progress(read_fd: int, dest: Path) -> None:
         log.warning("progress reader stopped", exc_info=True)
 
 
-def open_child_pipe(child_fd: int) -> tuple[int, int]:
-    """Return ``(read_fd, child_fd)`` with the write end on ``child_fd``.
+def open_child_pipe() -> tuple[int, int]:
+    """Return ``(read_fd, write_fd)`` for a pipe the child writes.
 
-    ``pipe()`` can assign the read end to ``child_fd``. Copying the write
-    end onto that descriptor then closes the read end, and the first write
-    kills the child with SIGPIPE. The read end is moved first.
+    The write end keeps whatever number ``pipe()`` gave it. An earlier version
+    moved it onto a fixed number with ``dup2``, which silently replaced that
+    descriptor if another thread had it open, such as the CG feeder's devtools
+    socket. The argv is rebound to the real number at spawn time instead.
     """
-    read_fd, write_fd = os.pipe()
-    if read_fd == child_fd:
-        moved = os.dup(read_fd)
-        os.close(read_fd)
-        read_fd = moved
-    if write_fd != child_fd:
-        os.dup2(write_fd, child_fd)
-        os.close(write_fd)
-    return read_fd, child_fd
+    return os.pipe()
 
 
 def open_progress_pipe() -> tuple[int, int]:
-    """Return ``(read_fd, 3)`` for ``ffmpeg -progress pipe:3``."""
-    return open_child_pipe(3)
+    """Return ``(read_fd, write_fd)`` for ``ffmpeg -progress``."""
+    return open_child_pipe()
 
 
 def pop_jpegs(buf: bytes) -> tuple[list[bytes], bytes]:
@@ -292,18 +287,25 @@ def widen_pipe(fd: int, size: int = STILL_PIPE_BYTES, what: str = "still") -> No
 
 
 def _popen_with_progress(argv: list[str], dest: Path, stderr=None, still_path: Path | None = None) -> subprocess.Popen:
-    """Run ffmpeg with -progress pipe:3 and, for SDI, the still on pipe:4."""
+    """Run ffmpeg with -progress on a pipe and, for SDI, the still on another.
+
+    The argv names them ``pipe:3`` and ``pipe:4``; the real descriptors are
+    bound here and handed over with ``pass_fds`` so their numbers survive exec.
+    """
     read_fd, child_fd = open_progress_pipe()
     still_read = None
     still_fd = None
     pass_fds = [child_fd]
+    bound = {PROGRESS_FD: child_fd}
     if still_path is not None:
-        still_read, still_fd = open_child_pipe(STILL_FD)
+        still_read, still_fd = open_child_pipe()
         widen_pipe(still_read)
         pass_fds.append(still_fd)
+        bound[STILL_FD] = still_fd
     try:
         proc = subprocess.Popen(
-            argv, stdout=subprocess.PIPE, stderr=stderr, pass_fds=tuple(pass_fds), close_fds=True
+            bind_pipe_fds(argv, bound), stdout=subprocess.PIPE, stderr=stderr,
+            pass_fds=tuple(pass_fds), close_fds=True,
         )
     except Exception:
         os.close(read_fd)

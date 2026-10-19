@@ -12,6 +12,8 @@ from nexencoder.cgfeed import (
     _Running,
     _attach_page,
     _drain,
+    _prepare_page,
+    png_size,
     chromium_argv,
     chromium_env,
     chromium_profile,
@@ -196,6 +198,27 @@ def test_attach_failure_says_what_the_browser_reported():
     halted = _Running()
     halted.stop.set()
     assert _attach_page(call, halted, url, wait=0.6) == ("", "stopped")
+
+
+def test_page_viewport_is_the_slot_not_the_window():
+    sent = []
+
+    def call(method, params=None, session_id=None, deadline=None):
+        sent.append((method, params, session_id))
+        return {}
+
+    _prepare_page(call, "s9", 1920, 1080)
+    assert sent[0][0] == "Emulation.setDeviceMetricsOverride"
+    assert sent[0][1]["width"] == 1920 and sent[0][1]["height"] == 1080
+    assert sent[0][1]["deviceScaleFactor"] == 1 and sent[0][1]["mobile"] is False
+    assert sent[0][2] == "s9"
+    assert sent[1][0] == "Emulation.setDefaultBackgroundColorOverride"
+    assert sent[1][1]["color"]["a"] == 0
+
+
+def test_png_size_reads_the_header():
+    assert png_size(_png(2, 1, bytes([0, 255, 0, 128, 255, 0, 0, 0]))) == (2, 1)
+    assert png_size(b"not a png") == (0, 0)
 
 
 def test_describe_targets_is_one_line():

@@ -18,7 +18,7 @@ from pathlib import Path
 
 from .cgfeed import SlotWriter
 from .effects import STILL_SECONDS
-from .pipeline import PREVIEW_SIZE
+from .pipeline import PREVIEW_SIZE, bind_pipe_fds
 from .signal import lavfi_rate, signal_mode
 
 log = logging.getLogger("nexencoder.live")
@@ -231,19 +231,19 @@ def _run_srt_once(
     audio_fd = None
     source_file = signal_file.with_name(signal_file.stem + ".source.json")
     try:
+        # The argv says pipe:7. The write end keeps its own number and the
+        # argv is rebound to it; a dup2 onto 7 would replace whatever another
+        # thread had there.
         read_fd, write_fd = os.pipe()
         try:
-            if write_fd != AUDIO_FD:
-                os.dup2(write_fd, AUDIO_FD)
-                os.close(write_fd)
-                write_fd = AUDIO_FD
             proc = spawn(
-                argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                pass_fds=(AUDIO_FD,), close_fds=True,
+                bind_pipe_fds(argv, {AUDIO_FD: write_fd}),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                pass_fds=(write_fd,), close_fds=True,
             )
         finally:
             try:
-                os.close(AUDIO_FD)
+                os.close(write_fd)
             except OSError:
                 pass
         audio_fd = read_fd
