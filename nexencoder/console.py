@@ -36,7 +36,14 @@ from .effects import (
 from .livefeed import check_loop_file
 from .errors import ParseError
 from .metrics import CATALOG, render_metrics
-from .noc import create_api_token, delete_api_token, list_api_tokens, revoke_api_token
+from .noc import (
+    NameLookup,
+    create_api_token,
+    delete_api_token,
+    list_api_tokens,
+    output_health,
+    revoke_api_token,
+)
 from .pipeline import SPLICE_PORT, preview_path, sections_from_mom, whep_url
 from .prom import PrometheusError, fetch
 from .services import (
@@ -48,6 +55,17 @@ from .services import (
     normalize_unit,
 )
 from .support import build_bundle, clear_journal
+from .vendors import (
+    VendorError,
+    list_vendors,
+    load_image,
+    pull_image,
+    remove_vendor,
+    save_vendor,
+    start_vendor,
+    stop_vendor,
+    write_caption_source,
+)
 from .sideband import Sideband
 from .status import signals_from_progress
 from .vanc import events_from_vanc
@@ -73,6 +91,11 @@ class Console:
         format_probe=None,
         decklink=None,
         token_path: Path | None = None,
+        vendor_runner=None,
+        docker_runner=None,
+        hls_root: Path | None = None,
+        proc_root: Path | None = None,
+        names: NameLookup | None = None,
     ) -> None:
         repo = Path(__file__).resolve().parents[1]
         self.prometheus_url = prometheus_url
@@ -91,6 +114,20 @@ class Console:
         self.format_probe = format_probe
         self.decklink = decklink if decklink is not None else DeckLinkWatch()
         self.token_path = token_path or Path("/etc/nexencoder/noc.token")
+        self.vendor_runner = vendor_runner
+        self.docker_runner = docker_runner
+        self.hls_root = hls_root or Path("/var/lib/nexencoder/hls")
+        self.proc_root = proc_root or Path("/proc")
+        self.names = names or NameLookup()
+
+    def output_status(self) -> dict:
+        return output_health(
+            load_config(self.config_path),
+            self.state_dir,
+            self.hls_root,
+            self.proc_root,
+            self.names,
+        )
 
     def metrics_text(self) -> str:
         config = load_config(self.config_path)
@@ -144,6 +181,8 @@ def make_handler(console: Console):
                     self._json(200, {"ok": True, "devices": console.device_lister()})
                 elif path == "/api/decklink":
                     self._json(200, console.decklink.snapshot())
+                elif path == "/api/outputs":
+                    self._json(200, console.output_status())
                 elif path == "/api/preview":
                     host = self.headers.get("Host", "127.0.0.1").split(":")[0] or "127.0.0.1"
                     channels = {
@@ -162,6 +201,8 @@ def make_handler(console: Console):
                     self._tokens(None)
                 elif path == "/api/services":
                     self._json(200, list_units(console.unit_runner))
+                elif path == "/api/vendors":
+                    self._json(200, list_vendors(console.state_dir, run=console.vendor_runner))
                 elif path == "/api/support":
                     self._support(query.get("hours", ""))
                 elif path.startswith("/api/services/") and path.endswith("/log"):
@@ -217,9 +258,23 @@ def make_handler(console: Console):
                     self._tokens(body)
                 elif parts == ["api", "journal", "clear"]:
                     self._journal_clear()
+                elif parts == ["api", "vendors", "save"]:
+                    self._vendor_save(body)
+                elif parts == ["api", "vendors", "start"]:
+                    self._vendor_start(body)
+                elif parts == ["api", "vendors", "stop"]:
+                    self._vendor_stop(body)
+                elif parts == ["api", "vendors", "remove"]:
+                    self._vendor_remove(body)
+                elif parts == ["api", "vendors", "pull"]:
+                    self._vendor_pull(body)
+                elif parts == ["api", "vendors", "load"]:
+                    self._vendor_load(body)
+                elif len(parts) == 4 and parts[0] == "api" and parts[1] == "channels" and parts[3] == "captions":
+                    self._caption_source(unquote(parts[2]), body)
                 else:
                     self._json(404, {"ok": False, "detail": "Unknown action"})
-            except ServiceError as exc:
+            except (ServiceError, VendorError) as exc:
                 self._json(400, {"ok": False, "detail": str(exc)})
             except ServiceUnavailable as exc:
                 self._json(503, {"ok": False, "detail": str(exc)})
@@ -231,6 +286,53 @@ def make_handler(console: Console):
             if length < 0 or length > limit:
                 raise ValueError("request body is too large")
             return self.rfile.read(length) if length else b""
+
+        def _vendor_body(self, body: bytes) -> dict:
+            raw = json.loads(body.decode("utf-8") or "{}")
+            if not isinstance(raw, dict):
+                raise ValueError("vendor must be an object")
+            return raw
+
+        def _vendor_save(self, body: bytes) -> None:
+            saved = save_vendor(console.state_dir, self._vendor_body(body))
+            try_record(console.state_dir, "vendor.save", saved)
+            self._json(200, {"ok": True, "vendor": saved})
+
+        def _vendor_start(self, body: bytes) -> None:
+            raw = self._vendor_body(body)
+            started = start_vendor(console.state_dir, str(raw.get("name") or ""), run=console.vendor_runner)
+            try_record(console.state_dir, "vendor.start", {"name": started["name"], "channel": started["channel"]})
+            self._json(200, {"ok": True, "vendor": started})
+
+        def _vendor_stop(self, body: bytes) -> None:
+            raw = self._vendor_body(body)
+            stopped = stop_vendor(console.state_dir, str(raw.get("name") or ""), run=console.vendor_runner)
+            try_record(console.state_dir, "vendor.stop", {"name": stopped["name"], "channel": stopped["channel"]})
+            self._json(200, {"ok": True, "vendor": stopped})
+
+        def _vendor_remove(self, body: bytes) -> None:
+            raw = self._vendor_body(body)
+            removed = remove_vendor(console.state_dir, str(raw.get("name") or ""), run=console.vendor_runner)
+            try_record(console.state_dir, "vendor.remove", {"name": removed["name"]})
+            self._json(200, {"ok": True, "vendor": removed})
+
+        def _vendor_pull(self, body: bytes) -> None:
+            raw = self._vendor_body(body)
+            pulled = pull_image(str(raw.get("image") or ""), docker=console.docker_runner)
+            try_record(console.state_dir, "vendor.pull", {"image": pulled["image"]})
+            self._json(200, pulled)
+
+        def _vendor_load(self, body: bytes) -> None:
+            raw = self._vendor_body(body)
+            loaded = load_image(console.state_dir, str(raw.get("file") or ""), docker=console.docker_runner)
+            try_record(console.state_dir, "vendor.load", {"file": loaded["file"]})
+            self._json(200, loaded)
+
+        def _caption_source(self, channel_id: str, body: bytes) -> None:
+            raw = self._vendor_body(body)
+            source = write_caption_source(console.state_dir, channel_id, str(raw.get("source") or ""))
+            try_record(console.state_dir, "caption.source", {"channel": channel_id, "source": source})
+            self._json(200, {"ok": True, "channel": channel_id, "source": source})
 
         def _save_config(self, body: bytes) -> None:
             raw = json.loads(body.decode("utf-8") or "{}")

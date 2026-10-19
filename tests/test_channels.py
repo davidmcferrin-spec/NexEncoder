@@ -1,7 +1,7 @@
 """VANC buffer scan and the metrics snapshot a config produces."""
 
 from nexencoder.cdp import CC_608_FIELD1, CC_DTVCC_DATA, CC_DTVCC_START, CcTriplet, build_cdp
-from nexencoder.channels import normalize_config, snapshot_for
+from nexencoder.channels import firewall_udp_ports, normalize_config, snapshot_for
 from nexencoder.metrics import render_metrics
 from nexencoder import scte104 as s104
 from nexencoder.status import parse_ffmpeg_progress, signals_from_progress
@@ -46,6 +46,23 @@ def test_normalize_keeps_legal_values_and_drops_the_rest():
     assert config["outputs"]["B"][0]["host"] == "origin.example"
     assert config["inputs"]["B"]["bitrate"] == 18
     assert config["outputs"]["B"][0]["port"] == 9001
+    brightcove = normalize_config({
+        "outputs": {
+            "A": {"mode": "srt-caller", "url": "srt://32423452.live.ingest.brightcove.com:5000/?mode=caller"},
+            "B": {"mode": "srt-caller", "host": "stale.example", "port": 1, "url": "srt://cdn.example:7000/live/main?streamid=news"},
+        },
+    })
+    assert brightcove["outputs"]["A"][0]["url"] == "srt://32423452.live.ingest.brightcove.com:5000/?mode=caller"
+    assert brightcove["outputs"]["A"][0]["host"] == "32423452.live.ingest.brightcove.com"
+    assert brightcove["outputs"]["A"][0]["port"] == 5000
+    assert brightcove["outputs"]["B"][0]["host"] == "cdn.example"
+    assert brightcove["outputs"]["B"][0]["port"] == 7000
+    assert brightcove["outputs"]["B"][0]["url"].endswith("/live/main?streamid=news")
+    refused = normalize_config({
+        "outputs": {"A": {"mode": "srt-caller", "host": "kept.example", "port": 9000, "url": "https://nope.example/live"}},
+    })
+    assert refused["outputs"]["A"][0]["url"] == ""
+    assert refused["outputs"]["A"][0]["host"] == ""
     assert config["inputs"]["A"]["source"] == "sdi"
     listener = normalize_config({
         "outputs": {"B": {"mode": "srt-listener", "port": 9001}},
@@ -72,6 +89,23 @@ def test_each_input_keeps_up_to_four_destinations():
     text = render_metrics(snapshot_for(crowded, {"A": {"running": True, "bitrate_bps": 8_000_000}}))
     assert text.count("nexencoder_output_video_bitrate_bps{") == 1
     assert 'destination="1"' in text and 'destination="4"' in text
+
+
+def test_firewall_ports_follow_every_srt_listener():
+    legacy = normalize_config({
+        "outputs": {"A": {"mode": "srt-listener", "port": 9000}},
+    })
+    assert firewall_udp_ports(legacy) == [9000, 9001, 9002, 9101]
+    several = normalize_config({
+        "outputs": {
+            "A": [
+                {"mode": "srt-listener", "port": 9000},
+                {"mode": "hls-push", "url": "https://origin.example/live"},
+                {"mode": "srt-listener", "port": 9300},
+            ],
+        },
+    })
+    assert firewall_udp_ports(several) == [9000, 9001, 9002, 9101, 9300]
 
 
 def test_snapshot_omits_resolution_until_the_input_locks():

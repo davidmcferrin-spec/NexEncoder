@@ -1,0 +1,19 @@
+[Unit]
+Description=NexEncoder vendor sidecar %i
+After=docker.service
+Wants=docker.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT@
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m nexencoder.vendors supervise %i --state /var/lib/nexencoder/state
+ExecStop=/usr/bin/python3 -m nexencoder.vendors stop %i --state /var/lib/nexencoder/state
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

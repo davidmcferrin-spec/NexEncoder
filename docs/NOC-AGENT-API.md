@@ -513,7 +513,7 @@ null for SDI. That port is the contribution listener, not the CDN output.
 `transport.destination` is the CDN target with secrets removed: userinfo passwords
 become `REDACTED`, and query keys `token`, `key`, `secret`, `password`, `pass`,
 `signature`, `sig`, `auth`, `access_token`, `passphrase`, `api_key`, and `apikey`
-do too. The host and path stay. SRT caller destinations are `srt://<host>:<port>?mode=caller`.
+do too. The host and path stay. An SRT caller that was saved as an `srt://` URL is returned as that URL, including its path and query. A caller saved as only a host and port is `srt://<host>:<port>?mode=caller`.
 Listener destinations are `srt://0.0.0.0:<port>?mode=listener`. Pull destinations are
 the local playlist path. The encoder config has no SRT passphrase field.
 

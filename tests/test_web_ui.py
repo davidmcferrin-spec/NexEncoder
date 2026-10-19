@@ -6,12 +6,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "web"
-PAGES = ("index.php", "effects.php", "metrics.php", "services.php")
+PAGES = ("index.php", "effects.php", "metrics.php", "services.php", "vendors.php")
 PAGE_SCRIPTS = {
     "index.php": ["assets/theme.js", "assets/console.js", "assets/preview.js"],
     "effects.php": ["assets/theme.js", "assets/console.js", "assets/effects.js"],
     "metrics.php": ["assets/theme.js", "assets/console.js", "assets/metrics.js"],
     "services.php": ["assets/theme.js", "assets/console.js", "assets/services.js"],
+    "vendors.php": ["assets/theme.js", "assets/console.js", "assets/vendors.js"],
 }
 SHELL = ("page-shell", "shell-top", "shell-sidebar", "shell-main", "shell-footer")
 
@@ -73,6 +74,7 @@ def test_pages_share_the_nexapp_shell():
         assert "assets/encoder.css" in parser.links
         assert parser.scripts == PAGE_SCRIPTS[name]
         assert 'href="metrics.php"' in text and 'href="services.php"' in text
+        assert 'href="vendors.php"' in text
         assert 'href="effects.php"' in text
         assert 'href="inputs.php"' not in text
         assert 'href="outputs.php"' not in text
@@ -90,7 +92,7 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     feed = (WEB / "includes" / "feed.php").read_text(encoding="utf-8")
     assert "http://127.0.0.1:8788" in feed
     assert "NexEncoder" in feed
-    for script in ("config.php", "bars.php", "service.php", "preset.php", "detect.php", "support.php", "journal-clear.php", "tokens.php"):
+    for script in ("config.php", "bars.php", "service.php", "preset.php", "detect.php", "support.php", "journal-clear.php", "tokens.php", "vendor.php", "caption-source.php"):
         text = (WEB / "admin" / script).read_text(encoding="utf-8")
         assert "includes/feed.php" in text
         assert "nexencoder_admin_request" in text
@@ -122,6 +124,13 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     assert 'id="dump-clear"' not in page
     assert 'class="support-bundle-bar"' in page
     assert 'id="token-panel"' in page and 'id="token-list"' in page and "Create token" in page
+    vendors_js = (WEB / "assets" / "vendors.js").read_text(encoding="utf-8")
+    assert "/admin/vendors.php" in vendors_js and "/admin/vendor.php" in vendors_js
+    assert "/admin/caption-source.php" in vendors_js
+    assert "/api/" not in vendors_js
+    vendors_page = (WEB / "vendors.php").read_text(encoding="utf-8")
+    assert 'id="vendor-form"' in vendors_page and 'id="caption-sources"' in vendors_page
+    assert "docs/VENDOR.md" in vendors_page
     assert page.index("support-bundle-bar") < page.index('id="unit-list"')
     assert 'id="dump-journal"' not in page
     assert "Download zip" in page
@@ -164,13 +173,18 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     assert 'data-add-output="A"' in dashboard and 'data-output-list="B"' in dashboard
     assert 'id="bitrate-A"' in dashboard and 'id="bitrate-B"' in dashboard
     assert "MAX_OUTPUTS = 4" in js and "data-add-output" in js
+    assert "SRT URL" in js and "parseCallerUrl" in js
     for retired in ("inputs.php", "outputs.php", "monitor.php"):
         text = (WEB / retired).read_text(encoding="utf-8")
         assert "Location: index.php" in text
         assert "page-shell" not in text
     assert "nexencoder-channel@" in js and "showModal" in js
     assert "data-field-" in js and "data-open-dialog" in js
+    assert 'id="output-health-A"' in dashboard and 'id="output-health-B"' in dashboard
     assert "/live/decklink.php" in (WEB / "assets" / "console.js").read_text(encoding="utf-8")
+    assert "/live/outputs.php" in (WEB / "assets" / "console.js").read_text(encoding="utf-8")
+    live = (WEB / "live" / "outputs.php").read_text(encoding="utf-8")
+    assert "includes/feed.php" in live and "/api/outputs" in live
     metrics = (WEB / "assets" / "metrics.js").read_text(encoding="utf-8")
     assert "/api/" not in metrics
     assert "Field rate" in metrics and "Raster" in metrics

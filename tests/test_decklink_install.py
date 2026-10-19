@@ -77,6 +77,7 @@ def test_setup_installs_local_archives_and_does_not_download_them():
     assert "ufw allow OpenSSH" in script
     assert "ufw allow 80/tcp" in script
     assert "ufw allow 8189/udp" in script
+    assert "firewall_udp_ports" in script
     assert "ProxyPass" not in script
 
 

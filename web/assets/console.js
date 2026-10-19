@@ -67,7 +67,19 @@
     if (Number.isInteger(port) && port >= 1 && port <= 65535) dest.port = port;
     if (dest.mode === "srt-listener" && dest.port === 9001) dest.port = 9101;
     if (dest.mode === "srt-listener" && dest.port === 9002) dest.port = 9102;
-    if (raw && typeof raw.url === "string") dest.url = raw.url.slice(0, 500);
+    if (raw && typeof raw.url === "string") dest.url = raw.url.slice(0, 1000);
+    if (dest.mode === "srt-caller") {
+      var caller = parseCallerUrl(dest.url);
+      if (caller) {
+        dest.url = caller.url;
+        dest.host = caller.host;
+        dest.port = caller.port;
+      } else if (dest.url) {
+        dest.url = "";
+      }
+    } else if (dest.mode === "srt-listener") {
+      dest.url = "";
+    }
     return dest;
   }
 
@@ -188,10 +200,36 @@
     });
   }
 
+  function parseCallerUrl(value) {
+    var text = String(value || "").trim();
+    if (!text || text.length > 1000 || /\s/.test(text)) return null;
+    var parsed;
+    try {
+      parsed = new URL(text);
+    } catch (err) {
+      return null;
+    }
+    if (parsed.protocol !== "srt:" || parsed.hash) return null;
+    var port = Number(parsed.port);
+    if (!parsed.hostname || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+    return { url: text, host: parsed.hostname, port: port };
+  }
+
+  function callerUrl(output) {
+    if (output.url && /^srt:\/\//i.test(output.url)) return output.url;
+    if (!output.host) return "";
+    var host = output.host.indexOf(":") === -1 ? output.host : "[" + output.host + "]";
+    return "srt://" + host + ":" + output.port;
+  }
+
+  function redactCaller(url) {
+    return String(url).replace(/^(srt:\/\/)([^/@:\s]+)(:[^@/\s]*)?@/i, "$1$2:REDACTED@");
+  }
+
   function summarizeOne(output) {
     if (output.mode === "srt-caller") {
-      var target = output.host ? output.host + ":" + output.port : "address not set";
-      return "SRT caller · " + target;
+      var target = callerUrl(output);
+      return target ? "SRT caller · " + redactCaller(target) : "SRT caller · URL not set";
     }
     if (output.mode === "srt-listener") return "SRT listener · port " + output.port;
     if (output.mode === "hls-push") {
@@ -268,6 +306,7 @@
       if (button) button.textContent = bars[id] ? "Bars with ident: on" : "Bars with ident: off";
     });
     renderOutputs();
+    if (outputHealth) paintOutputs(outputHealth);
   }
 
   function fieldNodes(id, name) {
@@ -315,7 +354,12 @@
     var card = el("div", "output-card");
     card.setAttribute("data-output-card", channelId + ":" + output.id);
     var head = el("div", "output-card-head");
-    head.appendChild(el("strong", "", "Output " + output.id));
+    var title = el("span", "output-card-title");
+    var dot = el("span", "status-dot");
+    dot.setAttribute("data-output-dot", channelId + ":" + output.id);
+    title.appendChild(dot);
+    title.appendChild(el("strong", "", "Output " + output.id));
+    head.appendChild(title);
     if (config.outputs[channelId].length > 1) {
       var remove = el("button", "btn-text", "Remove");
       remove.type = "button";
@@ -340,20 +384,20 @@
     card.appendChild(labeledField("Delivery", mode));
 
     if (output.mode === "srt-caller") {
-      var host = el("input");
-      host.id = "host-" + channelId + "-" + output.id;
-      host.type = "text";
-      host.autocomplete = "off";
-      host.spellcheck = false;
-      host.placeholder = "srt.example.com";
-      host.value = output.host;
-      host.setAttribute("data-output-field", "");
-      host.setAttribute("data-channel", channelId);
-      host.setAttribute("data-output-id", output.id);
-      host.setAttribute("data-key", "host");
-      card.appendChild(labeledField("Listener address", host));
+      var caller = el("input");
+      caller.id = "url-" + channelId + "-" + output.id;
+      caller.type = "text";
+      caller.autocomplete = "off";
+      caller.spellcheck = false;
+      caller.placeholder = "srt://srt.example.com:5000/live?mode=caller";
+      caller.value = callerUrl(output);
+      caller.setAttribute("data-output-field", "");
+      caller.setAttribute("data-channel", channelId);
+      caller.setAttribute("data-output-id", output.id);
+      caller.setAttribute("data-key", "url");
+      card.appendChild(labeledField("SRT URL", caller));
     }
-    if (output.mode === "srt-caller" || output.mode === "srt-listener") {
+    if (output.mode === "srt-listener") {
       var port = el("input");
       port.id = "port-" + channelId + "-" + output.id;
       port.type = "number";
@@ -443,6 +487,9 @@
       output.mode = input.value;
       if (output.mode === "srt-listener") {
         output.port = claimListenerPort(output.port, id + ":" + output.id);
+        output.url = "";
+      } else if (output.mode !== "srt-caller" && /^srt:\/\//i.test(output.url || "")) {
+        output.url = "";
       }
       persist(id);
       return;
@@ -458,6 +505,25 @@
       if (output.mode === "srt-listener") port = claimListenerPort(port, id + ":" + output.id);
       output.port = port;
       input.value = String(port);
+    } else if (key === "url" && output.mode === "srt-caller") {
+      var callerText = input.value.trim();
+      if (!callerText) {
+        output.url = "";
+        output.host = "";
+        input.value = "";
+      } else {
+        var caller = parseCallerUrl(callerText);
+        if (!caller) {
+          fieldError(id, "SRT caller URL must look like srt://host:port. A path and query can follow the port.");
+          setSaved(id, false);
+          input.value = callerUrl(output);
+          return;
+        }
+        output.url = caller.url;
+        output.host = caller.host;
+        output.port = caller.port;
+        input.value = caller.url;
+      }
     } else if (key === "host") {
       var host = input.value.trim();
       if (host.length > 253 || /\s/.test(host)) {
@@ -699,7 +765,9 @@
 
   paint();
   pollLock();
+  pollOutputs();
   setInterval(pollLock, 5000);
+  setInterval(pollOutputs, 5000);
 
   function paintLock(id, device, known) {
     var badge = document.getElementById("lock-" + id);
@@ -721,6 +789,80 @@
       badge.textContent = text;
     }
     if (row) row.textContent = text;
+  }
+
+  var outputHealth = null;
+  var HEALTH_WORD = { green: "Up", orange: "Check", red: "Down" };
+  var HEALTH_TITLE = {
+    connected: "Connected",
+    loss: "Connected, with loss or retransmits",
+    peer: "Peer is up, statistics are stale",
+    sending: "Encode is sending. The origin receipt is not confirmed",
+    down: "Not connected",
+    dns: "Hostname does not resolve"
+  };
+
+  function dnsLine(row) {
+    if (row.dns === "ok" && row.host && row.addresses && row.addresses.length) {
+      return row.host + " → " + row.addresses.join(", ");
+    }
+    if (row.dns === "failed" && row.host) return row.host + " does not resolve";
+    if (row.dns === "address" && row.addresses && row.addresses.length) return row.addresses.join(", ");
+    return "";
+  }
+
+  function applyDot(dot, row) {
+    dot.className = "status-dot status-dot-" + (row.state || "red");
+    var word = HEALTH_WORD[row.state] || "Down";
+    var reason = HEALTH_TITLE[row.detail] || word;
+    dot.title = reason;
+    dot.setAttribute("aria-label", word + ". " + reason);
+  }
+
+  function healthItem(row) {
+    var item = document.createElement("li");
+    var dot = document.createElement("span");
+    applyDot(dot, row);
+    var copy = document.createElement("span");
+    copy.className = "output-health-copy";
+    var label = document.createElement("span");
+    label.textContent = summarizeOne(row);
+    copy.appendChild(label);
+    var resolved = dnsLine(row);
+    if (resolved) {
+      var line = document.createElement("span");
+      line.className = "muted output-health-dns";
+      line.textContent = resolved;
+      copy.appendChild(line);
+    }
+    item.appendChild(dot);
+    item.appendChild(copy);
+    return item;
+  }
+
+  function paintOutputs(body) {
+    outputHealth = body;
+    ["A", "B"].forEach(function (id) {
+      var list = document.getElementById("output-health-" + id);
+      if (!list) return;
+      var rows = (body && body.channels && body.channels[id]) || [];
+      list.textContent = "";
+      rows.forEach(function (row) {
+        list.appendChild(healthItem(row));
+        var dot = document.querySelector("[data-output-dot='" + id + ":" + row.id + "']");
+        if (dot) applyDot(dot, row);
+      });
+    });
+  }
+
+  function pollOutputs() {
+    if (!document.getElementById("output-health-A") && !document.getElementById("output-health-B")) return;
+    fetch("/live/outputs.php").then(function (response) {
+      if (!response.ok) throw new Error("outputs");
+      return response.json();
+    }).then(function (body) {
+      if (body && body.ok) paintOutputs(body);
+    }).catch(function () {});
   }
 
   function pollLock() {

@@ -54,7 +54,8 @@ def test_capture_keeps_vanc_and_leaves_the_monitor_off_this_process():
     assert "+ildct+ilme" in argv
     graph = argv[argv.index("-filter_complex") + 1]
     assert graph.index("[0:v]split=2[vsrc][vstill]") < graph.index("nexeffect")
-    assert graph.index("nexeffect") < graph.index("[vprog]")
+    assert graph.index("nexeffect") < graph.index("nexcaption=file=")
+    assert graph.index("nexcaption=file=") < graph.index("[vprog]")
     assert "[vprev]" not in graph
     assert "interlaced=1" in graph
     assert "nextone=hold=" in graph
@@ -89,7 +90,7 @@ def test_srt_input_keeps_an_encode_clock_without_a_still():
     assert argv[argv.index("-f") + 1] == "lavfi"
     assert "color=c=black:s=1920x1080:r=60000/1001" in argv
     assert any(item.startswith("anullsrc=") for item in argv)
-    assert "nexeffect=" in graph and "nextone=" in graph
+    assert "nexeffect=" in graph and "nextone=" in graph and "nexcaption=file=" in graph
     assert "[vstill]" not in graph and "[vprev]" not in graph
     assert "8554" not in " ".join(argv)
     assert "image2" not in argv
@@ -101,6 +102,7 @@ def test_preview_decodes_the_program_feed():
     assert preview_in.startswith("udp://239.255.1.1:19001?localaddr=127.0.0.1")
     assert "buffer_size=8388608" in preview_in
     assert "nexeffect" not in " ".join(argv)
+    assert "nexcaption" not in " ".join(argv)
     assert "decklink" not in argv
     assert argv[argv.index("-f") + 1] == "mpegts"
     assert argv[-1] == "rtsp://127.0.0.1:8554/inputA"
@@ -165,6 +167,9 @@ def test_splice_and_srt_listener():
     assert "--json-line" not in " ".join(quiet)
     caller = egress_argv("B", "srt-caller", "origin.example", 9001, "", "/tmp/hls")
     assert caller[caller.index("--caller") + 1] == "origin.example:9001"
+    brightcove = "srt://32423452.live.ingest.brightcove.com:5000/?mode=caller"
+    posted = egress_argv("A", "srt-caller", "ignored.example", 1, brightcove, "/tmp/hls")
+    assert posted[posted.index("--caller") + 1] == brightcove
     with pytest.raises(ValueError):
         egress_argv("A", "srt-caller", "", 9000, "", "/tmp/hls")
 

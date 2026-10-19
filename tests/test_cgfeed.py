@@ -398,16 +398,34 @@ def test_filter_patch_registers_nexeffect_and_copies_side_data(tmp_path):
     aligned = patch_makefile(padded)
     assert aligned.startswith(padded)
     assert "CONFIG_NEXTONE_FILTER" in aligned
+    assert "CONFIG_NEXCAPTION_FILTER" in aligned
+    upgraded = patch_makefile(
+        "OBJS-$(CONFIG_NEXEFFECT_FILTER) += vf_nexeffect.o\n"
+        "OBJS-$(CONFIG_NEXTONE_FILTER) += af_nextone.o\n"
+    )
+    assert "CONFIG_NEXCAPTION_FILTER" in upgraded
+    assert patch_makefile(upgraded) == upgraded
     filters = patch_allfilters("extern const FFFilter ff_vf_perspective;\n")
     assert "ff_vf_nexeffect" in filters
+    assert "ff_vf_nexcaption" in filters
     assert "ff_af_nextone" in filters
+    assert filters.index("ff_vf_nexcaption") < filters.index("ff_vf_nexeffect")
     assert filters.index("ff_vf_nexeffect") < filters.index("ff_vf_perspective")
+    grown = patch_allfilters(
+        "extern const FFFilter ff_af_nextone;\n"
+        "extern const FFFilter ff_vf_nexeffect;\n"
+        "extern const FFFilter ff_vf_perspective;\n"
+    )
+    assert grown.index("ff_vf_nexcaption") < grown.index("ff_vf_nexeffect")
     (tmp_path / "libavfilter").mkdir()
     (tmp_path / "libavfilter" / "Makefile").write_text(makefile, encoding="utf-8")
     (tmp_path / "libavfilter" / "allfilters.c").write_text(filters, encoding="utf-8")
     from nexencoder.effect_patch import install_filter
     install_filter(tmp_path)
     assert "nexeffect" in (tmp_path / "libavfilter" / "vf_nexeffect.c").read_text(encoding="utf-8")
+    caption = (tmp_path / "libavfilter" / "vf_nexcaption.c").read_text(encoding="utf-8")
+    assert "nexencoder caption slot" in caption
+    assert "AV_FRAME_DATA_A53_CC" in caption
     tone = (tmp_path / "libavfilter" / "af_nextone.c").read_text(encoding="utf-8")
     assert "nexencoder tone" in tone
     assert "WAITING FOR INPUT" in (tmp_path / "libavfilter" / "vf_nexeffect.c").read_text(encoding="utf-8")

@@ -39,6 +39,7 @@ header('X-Content-Type-Options: nosniff');
       <a href="effects.php"><span class="nav-ico">▣</span>Effects</a>
       <a href="metrics.php"><span class="nav-ico">◇</span>Metrics</a>
       <a href="services.php"><span class="nav-ico">⚙</span>Services</a>
+      <a href="vendors.php"><span class="nav-ico">▤</span>Vendors</a>
     </nav>
     <div class="side-foot">HD-SDI · SRT / HLS</div>
   </aside>
@@ -92,6 +93,7 @@ header('X-Content-Type-Options: nosniff');
           <span class="badge" id="lock-A">Lock unknown</span>
           <span class="channel-status-scte"><span>SCTE-35</span><span class="badge" id="scte-A">Idle</span></span>
         </p>
+        <ul class="output-health" id="output-health-A" aria-label="Input A outputs"></ul>
         <div class="log-box sideband-log" id="sideband-A" role="log" aria-label="Input A caption and splice log">Waiting for caption and splice events from the live path.</div>
         <dialog class="channel-dialog" id="input-dialog-A" aria-labelledby="input-dialog-title-A">
           <form method="dialog">
@@ -198,6 +200,7 @@ header('X-Content-Type-Options: nosniff');
           <span class="badge" id="lock-B">Lock unknown</span>
           <span class="channel-status-scte"><span>SCTE-35</span><span class="badge" id="scte-B">Idle</span></span>
         </p>
+        <ul class="output-health" id="output-health-B" aria-label="Input B outputs"></ul>
         <div class="log-box sideband-log" id="sideband-B" role="log" aria-label="Input B caption and splice log">Waiting for caption and splice events from the live path.</div>
         <dialog class="channel-dialog" id="input-dialog-B" aria-labelledby="input-dialog-title-B">
           <form method="dialog">

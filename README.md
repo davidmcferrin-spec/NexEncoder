@@ -158,7 +158,9 @@ existing token or `noc.json`.
 | `livefeed.py` | SRT ingest, waiting-loop feeder, and the DeckLink signal flag |
 | `effects.py` | Squeeze quads, CG layers, presets, recall and normalize |
 | `cgfeed.py` | HTML and SDI fill/key feeders for the CG slots |
-| `effect_patch.py` | Install the `nexeffect` filter into the FFmpeg 9.0.2 build |
+| `effect_patch.py` | Install the `nexeffect` and `nexcaption` filters into the FFmpeg 9.0.2 build |
+| `caption_feed.py` | Vendor caption datagrams written as the NXCC file the encode reads |
+| `vendors.py` | Docker sidecars for one channel. The container is not on the encode path |
 | `channels.py` | Saved channel config and the metrics snapshot it produces |
 | `channel.py` | One-channel supervisor: capture, spliceinject, egress |
 | `status.py` | ffmpeg progress file used for live bitrate and signal |
@@ -197,6 +199,7 @@ existing token or `noc.json`.
 - [x] Phase 6: four-corner squeeze, up to two CG layers (HTML or one SDI fill/key), effect builder, preset recall and normalize
 - [x] Phase 7: SDI or SRT listener per input, waiting picture on layer −5, bars and ident on layer +5, fractional presets, 1080p
 - [x] NOC agent: `/api/noc/v1` identity, host metrics, per-output status, and start/stop/restart. See `docs/NOC-AGENT-API.md`.
+- [x] Vendor sidecars: a Docker image bound to channel A or B, host network, caption and SCTE sockets. The encode stays on the host. See `docs/VENDOR.md`.
 
 Live proof still open: a DeckLink signal, a real VANC capture, TSDuck `tstables` on a generated section, a CPU benchmark of two 1080i encodes, and a live recall of a squeeze plus an HTML layer on the MS-01.
 

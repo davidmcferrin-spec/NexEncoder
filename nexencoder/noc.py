@@ -19,6 +19,7 @@ import secrets
 import socket
 import ssl
 import subprocess
+import threading
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -42,7 +43,7 @@ from .pipeline import (
 )
 from .signal import signal_mode
 from .srtstats import empty_srt, load_srt_snapshot
-from .status import parse_ffmpeg_progress, progress_bitrate_bps
+from .status import parse_ffmpeg_progress, progress_bitrate_bps, signals_from_progress
 
 log = logging.getLogger("nexencoder.noc")
 
@@ -663,11 +664,194 @@ def connection(
     return None, "unknown"
 
 
+def output_hostname(spec: dict) -> str:
+    """Remote name for an SRT caller or an HLS push. Listeners and local pulls have none."""
+    mode = spec.get("mode")
+    if mode == "srt-caller":
+        url = spec.get("url")
+        if isinstance(url, str) and url.strip():
+            name = url_hostname(url)
+            if name:
+                return name
+        host = spec.get("host")
+        return host.strip() if isinstance(host, str) else ""
+    if mode == "hls-push":
+        url = spec.get("url")
+        return url_hostname(url if isinstance(url, str) else "")
+    return ""
+
+
+def url_hostname(url: str) -> str:
+    text = url.strip()
+    if not text:
+        return ""
+    parts = urlsplit(text if "://" in text else "//" + text)
+    return (parts.hostname or "").strip()
+
+
+def _srt_interval_loss(body: dict | None) -> bool:
+    if not body:
+        return False
+    for key in ("packets_lost_interval", "retransmits_interval"):
+        value = body.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            return True
+    return False
+
+
+def transmission(mode: str, evidence: str, srt_body: dict | None, dns: str) -> tuple[str, str]:
+    """Green, orange, or red, plus a short reason the dashboard can show."""
+    if dns == "failed":
+        return "red", "dns"
+    if mode.startswith("srt-"):
+        if evidence == "srt-stats":
+            if _srt_interval_loss(srt_body):
+                return "orange", "loss"
+            return "green", "connected"
+        if evidence == "udp-socket":
+            return "orange", "peer"
+        return "red", "down"
+    if mode == "hls-pull":
+        if evidence == "hls-playlist":
+            return "green", "connected"
+        return "red", "down"
+    if mode == "hls-push":
+        if evidence == "hls-push-process":
+            return "orange", "sending"
+        return "red", "down"
+    return "red", "down"
+
+
+def classify_host(host: str) -> str:
+    text = host.strip()
+    if not text:
+        return "none"
+    bare = text[1:-1] if text.startswith("[") and text.endswith("]") else text
+    try:
+        ipaddress.ip_address(bare)
+    except ValueError:
+        return "name"
+    return "address"
+
+
+def resolve_addresses(host: str, timeout: float = 2.0) -> list[str]:
+    """Addresses for one name. A slow resolver fails instead of holding the page."""
+    found: list[list[str]] = []
+    errors: list[BaseException] = []
+
+    def work() -> None:
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except OSError as exc:
+            errors.append(exc)
+            return
+        addresses: list[str] = []
+        for info in infos:
+            addr = info[4][0]
+            if addr not in addresses:
+                addresses.append(addr)
+        found.append(addresses)
+
+    thread = threading.Thread(target=work, daemon=True)
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive() or errors or not found or not found[0]:
+        raise OSError(f"could not resolve {host}")
+    return found[0]
+
+
+class NameLookup:
+    """Cache encoder DNS so the dashboard poll does not query on every pass."""
+
+    def __init__(self, resolver=None, ttl: float = 30.0) -> None:
+        self.resolver = resolver or resolve_addresses
+        self.ttl = ttl
+        self._rows: dict[str, tuple[float, dict]] = {}
+
+    def lookup(self, host: str, now: float | None = None) -> dict:
+        kind = classify_host(host)
+        text = host.strip()
+        if kind == "none":
+            return {"host": "", "dns": "none", "addresses": []}
+        if kind == "address":
+            bare = text[1:-1] if text.startswith("[") and text.endswith("]") else text
+            return {"host": bare, "dns": "address", "addresses": [bare]}
+        clock = time.time() if now is None else now
+        key = text.lower().rstrip(".")
+        cached = self._rows.get(key)
+        if cached is not None and clock - cached[0] < self.ttl:
+            return cached[1]
+        try:
+            addresses = list(self.resolver(text))
+        except OSError:
+            row = {"host": text, "dns": "failed", "addresses": []}
+        else:
+            row = {"host": text, "dns": "ok", "addresses": addresses} if addresses else {
+                "host": text, "dns": "failed", "addresses": [],
+            }
+        self._rows[key] = (clock, row)
+        return row
+
+
+def output_health(
+    config: dict,
+    state_dir: Path,
+    hls_root: Path,
+    proc_root: Path,
+    names: NameLookup,
+    now: float | None = None,
+) -> dict:
+    """One row per saved destination. DNS failure turns the dot red."""
+    clock = time.time() if now is None else now
+    signals = signals_from_progress(state_dir, clock)
+    channels: dict[str, list[dict]] = {}
+    for channel_id in CHANNELS:
+        encoding = bool((signals.get(channel_id) or {}).get("running"))
+        rows = []
+        for spec in config["outputs"][channel_id]:
+            mode = spec["mode"]
+            host = output_hostname(spec)
+            looked = names.lookup(host, clock)
+            srt_body = None
+            udp = None
+            playlist = None
+            if mode.startswith("srt-"):
+                loaded = load_srt_snapshot(
+                    srt_stats_path(state_dir, channel_id, spec["id"]), clock, SRT_FRESH_SECONDS,
+                )
+                srt_body = loaded or empty_srt()
+                udp = udp_peer_connected(proc_root, mode, int(spec["port"]))
+            elif mode == "hls-pull":
+                playlist = playlist_fresh(
+                    hls_publish_dir(hls_root, channel_id, spec["id"]) / "index.m3u8", clock,
+                )
+            _connected, evidence = connection(
+                mode, encoding, bool(srt_body and srt_body.get("fresh")), udp, playlist,
+            )
+            state, detail = transmission(mode, evidence, srt_body, looked["dns"])
+            rows.append({
+                "id": spec["id"],
+                "mode": mode,
+                "host": looked["host"] or host,
+                "port": int(spec["port"]) if mode.startswith("srt-") else None,
+                "url": redact_url(spec.get("url") or "") if mode in {"hls-push", "srt-caller"} else "",
+                "state": state,
+                "detail": detail,
+                "dns": looked["dns"],
+                "addresses": looked["addresses"],
+            })
+        channels[channel_id] = rows
+    return {"ok": True, "channels": channels}
+
+
 def destination(channel_id: str, spec: dict, hls_root: Path) -> str:
     mode = spec["mode"]
     if mode == "srt-listener":
         return f"srt://0.0.0.0:{int(spec['port'])}?mode=listener"
     if mode == "srt-caller":
+        url = spec.get("url") or ""
+        if isinstance(url, str) and url.lower().startswith("srt://"):
+            return redact_url(url)
         return f"srt://{spec['host']}:{int(spec['port'])}?mode=caller"
     if mode == "hls-push":
         return redact_url(spec.get("url") or "")

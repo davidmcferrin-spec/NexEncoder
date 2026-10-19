@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .metrics import InputStatus, OutputStatus, Snapshot
 from .signal import signal_mode
@@ -93,6 +94,19 @@ def _legacy_bitrate(items: list[dict]) -> int | None:
     return None
 
 
+def parse_srt_caller_url(value: str) -> dict:
+    """Host, port, and the URL itself. The path and query stay on the URL."""
+    text = value.strip()
+    if not text or len(text) > 1000 or any(ord(ch) < 32 or ch.isspace() for ch in text):
+        raise ValueError("SRT caller URL must be srt://host:port")
+    parts = urlsplit(text)
+    if parts.scheme.lower() != "srt" or not parts.hostname or parts.port is None or parts.fragment:
+        raise ValueError("SRT caller URL must be srt://host:port")
+    if len(parts.hostname) > 253:
+        raise ValueError("SRT caller URL must be srt://host:port")
+    return {"url": text, "host": parts.hostname, "port": int(parts.port)}
+
+
 def _clean_destination(item: dict, fallback_port: int) -> dict:
     dest = {"id": "", "mode": "srt-listener", "host": "", "port": fallback_port, "url": ""}
     slot = item.get("id")
@@ -113,7 +127,17 @@ def _clean_destination(item: dict, fallback_port: int) -> dict:
             port = 9101 if port == 9001 else 9102
         dest["port"] = port
     url = item.get("url")
-    if isinstance(url, str) and len(url) <= 500 and (url == "" or url.startswith(("http://", "https://"))):
+    if dest["mode"] == "srt-caller" and isinstance(url, str) and url.strip():
+        try:
+            parsed = parse_srt_caller_url(url)
+        except ValueError:
+            dest["url"] = ""
+            dest["host"] = ""
+        else:
+            dest["url"] = parsed["url"]
+            dest["host"] = parsed["host"]
+            dest["port"] = parsed["port"]
+    elif dest["mode"] in {"hls-push", "hls-pull"} and isinstance(url, str) and len(url) <= 1000 and (url == "" or url.startswith(("http://", "https://"))):
         dest["url"] = url
     return dest
 
@@ -153,6 +177,16 @@ def _unique_listeners(config: dict) -> None:
                 port = _next_listener_port(used)
                 dest["port"] = port
             used.add(port)
+
+
+def firewall_udp_ports(config: dict) -> list[int]:
+    """Input SRT ports plus every SRT listener. ``config`` is normalized, so each output is a list."""
+    ports = set(INPUT_SRT_PORTS.values())
+    for destinations in config["outputs"].values():
+        for spec in destinations:
+            if spec.get("mode") == "srt-listener":
+                ports.add(int(spec["port"]))
+    return sorted(ports)
 
 
 def hls_publish_dir(root: Path, channel_id: str, slot: str) -> Path:

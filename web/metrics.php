@@ -39,6 +39,7 @@ header('X-Content-Type-Options: nosniff');
       <a href="effects.php"><span class="nav-ico">▣</span>Effects</a>
       <a class="is-active" href="metrics.php"><span class="nav-ico">◇</span>Metrics</a>
       <a href="services.php"><span class="nav-ico">⚙</span>Services</a>
+      <a href="vendors.php"><span class="nav-ico">▤</span>Vendors</a>
     </nav>
     <div class="side-foot">HD-SDI · SRT / HLS</div>
   </aside>

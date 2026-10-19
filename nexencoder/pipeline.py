@@ -10,6 +10,7 @@ do not spawn processes.
 from __future__ import annotations
 
 import ipaddress
+from pathlib import Path
 
 from .effects import STILL_SECONDS, escape_filter_value
 from .signal import SignalMode, h264_level, lavfi_rate, signal_mode
@@ -17,6 +18,8 @@ from .signal import SignalMode, h264_level, lavfi_rate, signal_mode
 FEED_PORT = {"A": 19001, "B": 19002}
 SPLICE_PORT = {"A": 19101, "B": 19102}
 VANC_PORT = {"A": 19201, "B": 19202}
+# Vendor captions. The channel writes the file the nexcaption filter reads.
+CAPTION_PORT = {"A": 19301, "B": 19302}
 # TSDuck 3.45 ships the ip plugin and no udp plugin. The ip input only joins a
 # multicast group, so the program feed is this group on the loopback interface.
 FEED_ADDR = "239.255.1.1"
@@ -140,22 +143,38 @@ def _preview_filter() -> str:
     )
 
 
-def _filter_graph(interlaced: bool, effect_state: str, hold_path: str, pcm_path: str | None = None, audio_pad: str = "0:a") -> str:
+def caption_state_path(channel_id: str, state_dir: str | None = None) -> str:
+    """File the ``nexcaption`` filter reads. Idle contents leave VANC side data alone."""
+    root = Path(state_dir) if state_dir else Path("/var/lib/nexencoder/state")
+    return str(root / f"{channel_id}.cc")
+
+
+def _filter_graph(
+    interlaced: bool,
+    effect_state: str,
+    hold_path: str,
+    pcm_path: str | None = None,
+    audio_pad: str = "0:a",
+    caption_path: str | None = None,
+) -> str:
     """Squeeze and CG run on the program frame.
 
     The still is a second branch of the input frame, taken before the
     effect, so the builder can place corners on the clean picture. A/53
     side data stays on the program frame: ``nexeffect`` copies it after the
-    stack is flattened. SCTE-104 is forwarded by the demuxer and never
+    stack is flattened, then ``nexcaption`` replaces it only while a vendor
+    caption file is active. SCTE-104 is forwarded by the demuxer and never
     enters this graph. ``nextone`` swaps in a tone while color bars are up.
     The monitor is not a branch of this graph.
     """
     state = escape_filter_value(effect_state)
     hold = escape_filter_value(hold_path)
+    caption = escape_filter_value(caption_path or "")
     field = 1 if interlaced else 0
     return (
         "[0:v]split=2[vsrc][vstill];"
-        f"[vsrc]nexeffect=state={state}:interlaced={field}:hold={hold}[vprog];"
+        f"[vsrc]nexeffect=state={state}:interlaced={field}:hold={hold}[veff];"
+        f"[veff]nexcaption=file={caption}[vprog];"
         f"[vstill]fps=1/{STILL_SECONDS},"
         f"scale={PREVIEW_SIZE}:force_original_aspect_ratio=decrease,format=yuv420p[vstillout];"
         f"[{audio_pad}]{_tone_filter(hold_path, pcm_path)}[aprog]"
@@ -173,6 +192,7 @@ def capture_argv(
     still_path: str | None = None,
     hold_path: str | None = None,
     pcm_path: str | None = None,
+    caption_path: str | None = None,
 ) -> list[str]:
     """One DeckLink open: H.264/AAC MPEG-TS on stdout.
 
@@ -186,6 +206,7 @@ def capture_argv(
     state = effect_state or f"/var/lib/nexencoder/state/{channel_id}.effect"
     hold = hold_path or f"/var/lib/nexencoder/state/{channel_id}.wait"
     del still_path  # The parent writes the JPEG. This process only emits the pipe.
+    caption = caption_path or caption_state_path(channel_id)
     return [
         ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "warning",
         *progress,
@@ -198,7 +219,7 @@ def capture_argv(
         "-signal_loss_action", "repeat",
         "-format_code", mode.format_code,
         "-i", device,
-        "-filter_complex", _filter_graph(mode.interlaced, state, hold, pcm_path),
+        "-filter_complex", _filter_graph(mode.interlaced, state, hold, pcm_path, caption_path=caption),
         "-map", "[vprog]", "-map", "[aprog]",
         *_video_args(mode, bitrate_mbps),
         "-f", "mpegts",
@@ -220,6 +241,7 @@ def clock_argv(
     effect_state: str | None = None,
     hold_path: str | None = None,
     pcm_path: str | None = None,
+    caption_path: str | None = None,
 ) -> list[str]:
     """Always-on encode for an SRT input. The picture is black until a caller connects.
 
@@ -233,8 +255,10 @@ def clock_argv(
     hold = hold_path or f"/var/lib/nexencoder/state/{channel_id}.wait"
     color = f"color=c=black:s={mode.width}x{mode.height}:r={lavfi_rate(mode)}"
     field = 1 if mode.interlaced else 0
+    caption = escape_filter_value(caption_path or caption_state_path(channel_id))
     graph = (
-        f"[0:v]nexeffect=state={escape_filter_value(state)}:interlaced={field}:hold={escape_filter_value(hold)}[vprog];"
+        f"[0:v]nexeffect=state={escape_filter_value(state)}:interlaced={field}:hold={escape_filter_value(hold)}[veff];"
+        f"[veff]nexcaption=file={caption}[vprog];"
         f"[1:a]{_tone_filter(hold, pcm_path)}[aprog]"
     )
     return [
@@ -312,6 +336,7 @@ def srt_argv(
     port: int,
     tsp: str = "tsp",
     statistics: bool = True,
+    url: str = "",
 ) -> list[str]:
     """SRT egress via TSDuck. GStreamer is not on this path.
 
@@ -330,9 +355,13 @@ def srt_argv(
     if mode == "srt-listener":
         argv += ["--listener", f":{int(port)}", "--multiple"]
     elif mode == "srt-caller":
-        if not host:
-            raise ValueError("SRT caller needs a listener address")
-        argv += ["--caller", f"{host}:{int(port)}"]
+        text = url.strip() if isinstance(url, str) else ""
+        if text.startswith(("srt://", "SRT://")):
+            argv += ["--caller", text]
+        elif not host:
+            raise ValueError("SRT caller needs an SRT URL")
+        else:
+            argv += ["--caller", f"{host}:{int(port)}"]
     else:
         raise ValueError(f"{mode} is not an SRT delivery")
     if statistics:
@@ -398,5 +427,5 @@ def egress_argv(
     srt_statistics: bool = True,
 ) -> list[str]:
     if mode.startswith("srt-"):
-        return srt_argv(channel_id, mode, host, port, tsp, statistics=srt_statistics)
+        return srt_argv(channel_id, mode, host, port, tsp, statistics=srt_statistics, url=url)
     return hls_argv(channel_id, mode, url, publish_dir, ffmpeg)

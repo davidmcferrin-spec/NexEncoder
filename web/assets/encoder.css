@@ -462,6 +462,33 @@ button.unit-row.is-selected,
   color: var(--nx-muted);
   font-size: 0.82rem;
 }
+.output-health {
+  list-style: none;
+  margin: 0.45rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+.output-health li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+.output-health-copy { display: grid; gap: 0.05rem; min-width: 0; }
+.output-health-dns { overflow-wrap: anywhere; }
+.status-dot {
+  width: 0.65rem;
+  height: 0.65rem;
+  margin-top: 0.28rem;
+  border-radius: 50%;
+  flex: none;
+  background: var(--nx-muted);
+}
+.status-dot-green { background: var(--nx-ok); }
+.status-dot-orange { background: var(--nx-warn); }
+.status-dot-red { background: var(--nx-danger); }
+.output-card-title { display: inline-flex; align-items: center; gap: 0.45rem; }
+.output-card-title .status-dot { margin-top: 0; }
 .channel-dialog {
   width: min(34rem, calc(100vw - 2rem));
   max-height: min(40rem, calc(100vh - 2rem));

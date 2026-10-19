@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # NexEncoder one-command setup for Ubuntu 24.04 LTS. Idempotent: safe to re-run.
 #
-# Packages come from APT only: no pip, no venv, no Node, no containers.
+# Packages come from APT only: no pip, no venv, no Node. The encoder itself is
+# not a container. docker.io is installed so a vendor sidecar can run beside a
+# channel; that container is not on the encode path.
 # Installs Python, GStreamer, the local Prometheus stack, a pinned MediaMTX
 # binary, Apache and PHP for the operator pages, the live-data feed, the channel
 # units, and the token-authenticated NOC agent.
 # FFmpeg 9.0.2 is downloaded and built with DeckLink (--enable-nonfree), OpenSSL
 # (--enable-version3), libx264, and libopus. The DeckLink demuxer is patched to forward VANC captions and
 # SCTE-104 to the channel supervisor. The nexeffect filter is added for the
-# four-corner squeeze and CG stack. TSDuck 3.45-4798 is downloaded from the
+# four-corner squeeze and CG stack, and nexcaption for vendor captions at the
+# encode. TSDuck 3.45-4798 is downloaded from the
 # official release and installed when tsp is not already on PATH.
 # Ubuntu 24.04 does not build the WPE GStreamer plugin. HTML CG then uses
 # Google Chrome, downloaded from Google when no Chromium binary is on PATH.
@@ -113,18 +116,14 @@ allow_firewall() {
   ports="$(python3 -c '
 import json
 from pathlib import Path
-from nexencoder.channels import INPUT_SRT_PORTS, normalize_config
+from nexencoder.channels import firewall_udp_ports, normalize_config
 raw = {}
 for path in (Path("/var/lib/nexencoder/config.json"), Path("config/encoder.json")):
     if path.is_file():
         raw = json.loads(path.read_text(encoding="utf-8"))
         break
 cfg = normalize_config(raw if isinstance(raw, dict) else {})
-ports = set(INPUT_SRT_PORTS.values())
-for spec in cfg["outputs"].values():
-    if spec.get("mode") == "srt-listener":
-        ports.add(int(spec["port"]))
-print(" ".join(str(port) for port in sorted(ports)))
+print(" ".join(str(port) for port in firewall_udp_ports(cfg)))
 ')"
   for port in $ports; do
     $SUDO ufw allow "${port}/udp" >/dev/null
@@ -255,7 +254,8 @@ ffmpeg_build_ok() {
     && [[ "$decoders" == *" png "* ]] \
     && [[ -e /usr/local/lib/libavdevice.so ]] \
     && grep -a -q 'nexencoder VANC forwarder' /usr/local/lib/libavdevice.so \
-    && grep -a -q 'nexencoder effect stack' /usr/local/lib/libavfilter.so
+    && grep -a -q 'nexencoder effect stack' /usr/local/lib/libavfilter.so \
+    && grep -a -q 'nexencoder caption slot' /usr/local/lib/libavfilter.so
 }
 
 install_ffmpeg() {
@@ -283,7 +283,7 @@ install_ffmpeg() {
   log "patching DeckLink capture to forward VANC captions and SCTE-104"
   python3 -c 'import sys; from nexencoder.decklink_patch import patch_file; patch_file(sys.argv[1])' \
     "${src}/libavdevice/decklink_dec.cpp"
-  log "installing the nexeffect squeeze and CG filter"
+  log "installing the nexeffect squeeze, CG, and caption filters"
   python3 -c 'import sys; from nexencoder.effect_patch import install_filter; install_filter(sys.argv[1])' \
     "$src"
   log "building FFmpeg ${version} with DeckLink headers in ${sdk}"
@@ -314,7 +314,7 @@ install_ffmpeg() {
   $SUDO ldconfig
   rm -rf "$work"
   if ! ffmpeg_build_ok "$bin" "$version"; then
-    die "FFmpeg ${version} at ${bin} is missing DeckLink, the png decoder, the VANC forwarder, or nexeffect"
+    die "FFmpeg ${version} at ${bin} is missing DeckLink, the png decoder, the VANC forwarder, nexeffect, or nexcaption"
   fi
   ver="$("$bin" -version 2>/dev/null || true)"
   log "installed ${bin} (${ver%%$'\n'*})"
@@ -477,6 +477,15 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
   # leave the operator console on the previous copy.
   install_operator_pages
   install_ffmpeg
+  if ! dpkg -s docker.io >/dev/null 2>&1; then
+    log "installing docker.io for vendor sidecars"
+    $SUDO apt-get update -qq
+    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    $SUDO systemctl enable docker
+    $SUDO systemctl start docker || log "WARNING: docker did not start. Vendor sidecars stay stopped; the channels do not use it."
+  fi
   if dpkg -s desktopvideo >/dev/null 2>&1; then
     desktopvideo_version=$(dpkg-query -W -f='${Version}' desktopvideo 2>/dev/null || true)
     log "Desktop Video is installed (${desktopvideo_version})"
@@ -489,7 +498,7 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
   # a datagram when deinterlace stalls, and that hole pixelates until the next keyframe.
   printf 'net.core.rmem_max=8388608\nnet.core.rmem_default=8388608\n' | $SUDO tee /etc/sysctl.d/60-nexencoder.conf >/dev/null
   $SUDO sysctl --system >/dev/null || log "WARNING: could not raise the UDP receive buffer"
-  $SUDO mkdir -p /var/lib/nexencoder/hls /var/lib/nexencoder/state /var/lib/nexencoder/chrome /etc/nexencoder
+  $SUDO mkdir -p /var/lib/nexencoder/hls /var/lib/nexencoder/state /var/lib/nexencoder/state/vendors/incoming /var/lib/nexencoder/chrome /etc/nexencoder
   $SUDO chmod 0755 /var/lib/nexencoder/chrome
   if [ ! -f /var/lib/nexencoder/config.json ]; then
     $SUDO cp config/encoder.json /var/lib/nexencoder/config.json
@@ -518,6 +527,8 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
   unit_tmp="$(mktemp)"
   sed "s|@ROOT@|$(pwd)|g" systemd/nexencoder-channel@.service > "$unit_tmp"
   $SUDO cp "$unit_tmp" /etc/systemd/system/nexencoder-channel@.service
+  sed "s|@ROOT@|$(pwd)|g" systemd/nexencoder-vendor@.service > "$unit_tmp"
+  $SUDO cp "$unit_tmp" /etc/systemd/system/nexencoder-vendor@.service
   rm -f "$unit_tmp"
   $SUDO cp systemd/nexencoder-decklink-configure.service /etc/systemd/system/nexencoder-decklink-configure.service
   $SUDO cp systemd/mediamtx.service /etc/systemd/system/mediamtx.service

@@ -4,7 +4,8 @@
 A dead child, a failed exec, or a stalled frame counter restarts the pipeline
 with backoff. A config error exits 78 so systemd leaves the unit failed until
 an operator fixes it. VANC datagrams from the patched DeckLink demuxer are
-translated to SCTE-35 and posted to the console.
+translated to SCTE-35 and posted to the console. Vendor caption datagrams
+are written to the NXCC file the nexcaption filter reads at encode time.
 """
 
 from __future__ import annotations
@@ -55,6 +56,7 @@ from .pipeline import (
     STILL_FD,
     bind_pipe_fds,
     VANC_PORT,
+    caption_state_path,
     capture_argv,
     clock_argv,
     egress_argv,
@@ -65,6 +67,7 @@ from .signal import signal_mode
 from .srtstats import atomic_json, redact_secrets, start_srt_stats_reader, tsp_supports_srt_stats
 from .status import parse_ffmpeg_progress, progress_frame
 from .ts import PreviewGate
+from .caption_feed import start_caption_thread
 from .vanc_feed import start_vanc_thread
 
 log = logging.getLogger("nexencoder.channel")
@@ -598,17 +601,18 @@ def run_channel(
         if source == "srt":
             pcm_file = str(pcm_path(state_dir, channel_id))
     try:
+        caption_file = caption_state_path(channel_id, str(state_dir) if state_dir is not None else None)
         if source == "srt":
             capture = clock_argv(
                 channel_id, spec_in["format"], bitrate,
                 progress_path=progress_arg, effect_state=effect_file,
-                hold_path=hold_file, pcm_path=pcm_file,
+                hold_path=hold_file, pcm_path=pcm_file, caption_path=caption_file,
             )
         else:
             capture = capture_argv(
                 channel_id, spec_in["device"], spec_in["format"], bitrate,
                 progress_path=progress_arg, effect_state=effect_file, still_path=still_file,
-                hold_path=hold_file, pcm_path=pcm_file,
+                hold_path=hold_file, pcm_path=pcm_file, caption_path=caption_file,
             )
         splice = splice_argv(channel_id)
         wants_srt = any(item["mode"].startswith("srt-") for item in destinations)
@@ -696,6 +700,8 @@ def run_channel(
     if vanc_listen:
         os.environ["NEXENCODER_VANC_PORT"] = str(VANC_PORT[channel_id])
         start_vanc_thread(channel_id, vanc_stop, lambda: _running(splice_proc[0]))
+        if state_dir is not None:
+            start_caption_thread(channel_id, state_dir, vanc_stop)
 
     def stop(*_args) -> None:
         nonlocal stopping

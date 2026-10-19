@@ -815,3 +815,79 @@ def test_token_file_is_reread_and_a_revoked_token_fails(tmp_path):
     delete_api_token(path, created["id"])
     assert agent.token_matches(created["secret"]) is False
     assert agent.token_matches(TOKEN) is False
+
+
+def test_output_health_colors_transmission_and_dns(tmp_path):
+    from nexencoder.channels import normalize_config
+    from nexencoder.noc import NameLookup, output_health
+
+    now = time.time()
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "A.srt.json").write_text(json.dumps({
+        "observed_unix": now,
+        "rtt_ms": 4,
+        "packets_lost_interval": 0,
+        "retransmits_interval": 0,
+    }), encoding="utf-8")
+    (state / "A-2.srt.json").write_text(json.dumps({
+        "observed_unix": now,
+        "rtt_ms": 20,
+        "packets_lost_interval": 2,
+        "retransmits_interval": 0,
+    }), encoding="utf-8")
+    (state / "A.progress").write_text("frame=10\nprogress=continue\n", encoding="utf-8")
+    config = normalize_config({
+        "outputs": {
+            "A": [
+                {"mode": "srt-caller", "host": "origin.example", "port": 9000},
+                {"id": "2", "mode": "srt-caller", "host": "203.0.113.10", "port": 9201},
+                {"id": "3", "mode": "hls-push", "url": "https://user:secret@cdn.example/live/a.m3u8"},
+                {"id": "4", "mode": "hls-push", "url": "https://203.0.113.20/live/a.m3u8"},
+            ],
+            "B": [{"mode": "srt-listener", "port": 9101}],
+        },
+    })
+    calls = []
+
+    def resolver(host):
+        calls.append(host)
+        if host == "origin.example":
+            return ["203.0.113.8", "2001:db8::8"]
+        raise OSError("no such name")
+
+    names = NameLookup(resolver)
+    body = output_health(config, state, tmp_path / "hls", tmp_path / "proc", names, now)
+    clean = body["channels"]["A"][0]
+    assert clean["state"] == "green" and clean["detail"] == "connected"
+    assert clean["dns"] == "ok" and clean["addresses"] == ["203.0.113.8", "2001:db8::8"]
+    numbered = body["channels"]["A"][1]
+    assert numbered["state"] == "orange" and numbered["detail"] == "loss"
+    assert numbered["dns"] == "address" and numbered["addresses"] == ["203.0.113.10"]
+    failed = body["channels"]["A"][2]
+    assert failed["state"] == "red" and failed["detail"] == "dns"
+    assert "secret" not in json.dumps(failed)
+    assert "user:REDACTED@" in failed["url"]
+    sending = body["channels"]["A"][3]
+    assert sending["state"] == "orange" and sending["detail"] == "sending"
+    listener = body["channels"]["B"][0]
+    assert listener["dns"] == "none" and listener["state"] == "red" and listener["detail"] == "down"
+    output_health(config, state, tmp_path / "hls", tmp_path / "proc", names, now)
+    assert calls.count("origin.example") == 1
+    assert calls.count("cdn.example") == 1
+    assert "203.0.113.10" not in calls and "203.0.113.20" not in calls
+
+
+def test_caller_url_keeps_path_and_query_for_dns_and_status():
+    from nexencoder.noc import destination, output_hostname
+    spec = {
+        "id": "1",
+        "mode": "srt-caller",
+        "host": "stale.example",
+        "port": 1,
+        "url": "srt://user:secret@32423452.live.ingest.brightcove.com:5000/live?mode=caller",
+    }
+    assert output_hostname(spec) == "32423452.live.ingest.brightcove.com"
+    shown = destination("A", spec, Path("/tmp"))
+    assert shown == "srt://user:REDACTED@32423452.live.ingest.brightcove.com:5000/live?mode=caller"
+    assert "secret" not in shown
