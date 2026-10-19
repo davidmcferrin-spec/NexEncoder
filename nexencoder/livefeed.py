@@ -330,5 +330,9 @@ def watch_decklink_signal(stream, signal_file: Path, stop: threading.Event) -> N
             if locked is not None:
                 write_flag(signal_file, locked)
                 log.info("SDI signal %s", "locked" if locked else "lost")
+                continue
+            text = " ".join(line.split())
+            if text:
+                log.warning("capture %s", text[:500])
     except Exception:
         log.warning("signal watcher stopped", exc_info=True)

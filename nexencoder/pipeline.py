@@ -157,7 +157,10 @@ def capture_argv(
         "-f", "decklink",
         "-raw_format", "yuv422p10",
         "-audio_input", "embedded",
-        "-signal_loss_action", "none",
+        # bars paints 8-bit only, and this capture is yuv422p10. repeat keeps
+        # the last picture when the input drops so the encode stays up; the
+        # waiting picture is drawn by nexeffect from the signal flag.
+        "-signal_loss_action", "repeat",
         "-format_code", mode.format_code,
         "-i", device,
         "-filter_complex", _filter_graph(mode.interlaced, state, hold, pcm_path),

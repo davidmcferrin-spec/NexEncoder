@@ -1,12 +1,13 @@
 """Capture, splice, and delivery argv. Nothing here opens a DeckLink device."""
 
+import os
 import subprocess
 import threading
 
 import pytest
 
 from nexencoder import scte104 as s104
-from nexencoder.channel import EXIT_CONFIG, progress_target, run_channel, run_preview
+from nexencoder.channel import EXIT_CONFIG, open_progress_pipe, progress_target, run_channel, run_preview
 from nexencoder.channels import save_config
 from nexencoder.pipeline import (
     SRT_STATS_INTERVAL_MS,
@@ -40,7 +41,7 @@ def test_capture_keeps_vanc_and_leaves_the_monitor_off_this_process():
     assert "[vprev]" not in graph
     assert "interlaced=1" in graph
     assert "nextone=hold=" in graph
-    assert argv[argv.index("-signal_loss_action") + 1] == "none"
+    assert argv[argv.index("-signal_loss_action") + 1] == "repeat"
     assert argv[argv.index("-a53cc") + 1] == "1"
 
 
@@ -309,6 +310,28 @@ def test_a_dead_monitor_does_not_restart_the_program(tmp_path):
     )
     assert code == 0
     assert len(program) == 1
+
+
+def test_progress_pipe_keeps_a_reader_when_fd_3_is_free():
+    saved = None
+    try:
+        saved = os.dup(3)
+    except OSError:
+        saved = None
+    else:
+        os.close(3)
+    read_fd, child_fd = open_progress_pipe()
+    try:
+        assert child_fd == 3
+        assert read_fd != 3
+        os.write(child_fd, b"frame=4\n")
+        assert os.read(read_fd, 16) == b"frame=4\n"
+    finally:
+        os.close(read_fd)
+        os.close(child_fd)
+        if saved is not None:
+            os.dup2(saved, 3)
+            os.close(saved)
 
 
 def test_progress_target_uses_a_pipe_on_the_service():

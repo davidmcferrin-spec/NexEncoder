@@ -107,26 +107,42 @@ def _consume_progress(read_fd: int, dest: Path) -> None:
         log.warning("progress reader stopped", exc_info=True)
 
 
+def open_progress_pipe() -> tuple[int, int]:
+    """Return ``(read_fd, 3)`` for ``ffmpeg -progress pipe:3``.
+
+    ``pipe()`` can assign the read end to fd 3. Copying the write end onto
+    fd 3 then closes that read end, the progress write has no reader, and
+    the first progress line kills ffmpeg with SIGPIPE. The read end is
+    moved off fd 3 before the write end is placed there.
+    """
+    read_fd, write_fd = os.pipe()
+    if read_fd == 3:
+        moved = os.dup(read_fd)
+        os.close(read_fd)
+        read_fd = moved
+    if write_fd != 3:
+        os.dup2(write_fd, 3)
+        os.close(write_fd)
+    return read_fd, 3
+
+
 def _popen_with_progress(argv: list[str], dest: Path, stderr=None) -> subprocess.Popen:
     """Run ffmpeg with -progress pipe:3 and mirror the latest block onto dest."""
-    read_fd, write_fd = os.pipe()
+    read_fd, child_fd = open_progress_pipe()
     try:
-        if write_fd != 3:
-            os.dup2(write_fd, 3)
-            os.close(write_fd)
         proc = subprocess.Popen(
-            argv, stdout=subprocess.PIPE, stderr=stderr, pass_fds=(3,), close_fds=True
+            argv, stdout=subprocess.PIPE, stderr=stderr, pass_fds=(child_fd,), close_fds=True
         )
     except Exception:
         os.close(read_fd)
         try:
-            os.close(3)
+            os.close(child_fd)
         except OSError:
             pass
         raise
     else:
         try:
-            os.close(3)
+            os.close(child_fd)
         except OSError:
             pass
     threading.Thread(target=_consume_progress, args=(read_fd, dest), name="nexencoder-progress", daemon=True).start()
