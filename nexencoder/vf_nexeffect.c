@@ -24,6 +24,7 @@
 #include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
+#include "libavutil/time.h"
 #include "libswscale/swscale.h"
 #include "avfilter.h"
 #include "filters.h"
@@ -71,6 +72,8 @@ typedef struct NexEffectContext {
     uint8_t *layer;
     uint8_t *wait_cache;
     int wait_kind;
+    int64_t cost_us[4];
+    int cost_frames;
     uint8_t *slot_cache[NX_SLOTS];
     uint32_t slot_seq[NX_SLOTS];
     int slot_cached[NX_SLOTS];
@@ -874,6 +877,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     int dst_stride[4];
     const uint8_t *src_data[4];
     int src_stride[4];
+    int64_t t0, t1, t2, t3;
 
     read_hold(s);
     parsed = read_state(s, &seq, &frames, corners, slots);
@@ -927,9 +931,11 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     dst_data[1] = dst_data[2] = dst_data[3] = NULL;
     dst_stride[0] = s->width * 4;
     dst_stride[1] = dst_stride[2] = dst_stride[3] = 0;
+    t0 = av_gettime_relative();
     sws_scale(s->sws_to, (const uint8_t *const *)in->data, in->linesize,
               0, s->height, dst_data, dst_stride);
     force_opaque(s->rgba, s->width, s->height);
+    t1 = av_gettime_relative();
     if (s->signal_ok && s->live_path[0] && strcmp(s->live_path, "-") &&
         read_layer(s->live_path, s->width, s->height, s->layer))
         memcpy(s->rgba, s->layer, (size_t)s->width * s->height * 4);
@@ -940,12 +946,30 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     } else {
         warp_rgba(s->rgba, s->warped, s->width, s->height, s->current);
     }
+    t2 = av_gettime_relative();
     composite(s->comp, s->warped, s->width, s->height, s);
+    t3 = av_gettime_relative();
     src_data[0] = s->comp;
     src_data[1] = src_data[2] = src_data[3] = NULL;
     src_stride[0] = s->width * 4;
     src_stride[1] = src_stride[2] = src_stride[3] = 0;
     sws_scale(s->sws_from, src_data, src_stride, 0, s->height, out->data, out->linesize);
+    s->cost_us[0] += t1 - t0;
+    s->cost_us[1] += t2 - t1;
+    s->cost_us[2] += t3 - t2;
+    s->cost_us[3] += av_gettime_relative() - t3;
+    if (++s->cost_frames >= 300) {
+        int64_t total = s->cost_us[0] + s->cost_us[1] + s->cost_us[2] + s->cost_us[3];
+        /* A frame at 60 fps is 16.7 ms; the filter owns one thread of it. */
+        if (total / s->cost_frames > 10000)
+            av_log(ctx, AV_LOG_WARNING,
+                   "nexeffect averages %.1f ms a frame over %d: to-rgb %.1f, squeeze %.1f, composite %.1f, to-yuv %.1f\n",
+                   total / 1000.0 / s->cost_frames, s->cost_frames,
+                   s->cost_us[0] / 1000.0 / s->cost_frames, s->cost_us[1] / 1000.0 / s->cost_frames,
+                   s->cost_us[2] / 1000.0 / s->cost_frames, s->cost_us[3] / 1000.0 / s->cost_frames);
+        memset(s->cost_us, 0, sizeof s->cost_us);
+        s->cost_frames = 0;
+    }
     av_frame_free(&in);
     if (parsed)
         write_run(s);
