@@ -234,6 +234,7 @@ CHROME_PROFILES = Path("/var/lib/nexencoder/chrome")
 # under nice 10 behind two encodes, so it gets a sliver of the CPU; the old
 # 8 s budget expired on every start and the layer never came up.
 PAGE_WAIT = 30.0
+SCREENSHOT_WAIT = 10.0
 _SINGLETON_FILES = ("SingletonLock", "SingletonSocket", "SingletonCookie")
 
 
@@ -656,9 +657,11 @@ def _session_for(call, target_id: str, deadline: float) -> str:
 def _attach_page(call, holder: "_Running", url: str, wait: float = PAGE_WAIT) -> tuple[str, str]:
     """Return (session id, reason) for the bug page on an open browser socket.
 
-    The browser prints its socket before it has a tab. Rather than wait for
-    that tab, ask for one as soon as the list has none. The reason is empty on
-    success and says what the browser reported when it is not.
+    The browser prints its socket before it has a tab. Wait for that tab, the
+    way Puppeteer waits for the initial page before it does anything else: a
+    page created during Chrome's own startup lost its renderer after one
+    frame. A page is asked for only when the wait ends without one. The reason
+    is empty on success and says what the browser reported when it is not.
     """
     deadline = time.monotonic() + wait
     polls = 0
@@ -676,19 +679,18 @@ def _attach_page(call, holder: "_Running", url: str, wait: float = PAGE_WAIT) ->
         target_id, current = choose_page_target(infos, url)
         if target_id:
             break
-        try:
-            target_id, current = _create_page(call, url, deadline)
-        except OSError as exc:
-            seen = f"{seen}; Target.createTarget failed: {exc}"
-        if target_id:
-            break
-        if holder.stop.wait(0.5):
+        if holder.stop.wait(0.2):
             return "", "stopped"
     if holder.stop.is_set():
         return "", "stopped"
+    late = time.monotonic() + 5
+    if not target_id and not seen.startswith("Target.getTargets failed"):
+        try:
+            target_id, current = _create_page(call, url, late)
+        except OSError as exc:
+            seen = f"{seen}; Target.createTarget failed: {exc}"
     if not target_id:
         return "", f"after {polls} polls, {seen}"
-    late = time.monotonic() + 5
     try:
         session_id = _session_for(call, target_id, late)
     except OSError as exc:
@@ -709,12 +711,45 @@ def _attach_page(call, holder: "_Running", url: str, wait: float = PAGE_WAIT) ->
             call("Page.enable", session_id=session_id, deadline=late)
         except OSError as again:
             return "", f"second page failed: {again}"
+    try:
+        # Inspector.targetCrashed and Inspector.detached say why a session dies.
+        call("Inspector.enable", session_id=session_id, deadline=late)
+    except OSError as exc:
+        log.info("Inspector events are off for %s: %s", target_id, exc)
     if current != url:
         try:
             call("Page.navigate", {"url": url}, session_id, deadline=late)
         except OSError as exc:
             return "", f"Page.navigate failed: {exc}"
     return session_id, ""
+
+
+_EVENTS_OF_NOTE = (
+    "Target.targetCrashed",
+    "Target.targetDestroyed",
+    "Target.detachedFromTarget",
+    "Inspector.targetCrashed",
+    "Inspector.detached",
+    "Inspector.targetReloadedAfterCrash",
+)
+
+
+def note_event(payload: dict) -> str:
+    """Return a journal line for a browser event worth knowing about, else ''."""
+    method = payload.get("method")
+    if method not in _EVENTS_OF_NOTE:
+        return ""
+    params = payload.get("params")
+    params = params if isinstance(params, dict) else {}
+    bits = []
+    for key in ("targetId", "sessionId", "reason", "status", "errorCode"):
+        value = params.get(key)
+        if value not in (None, ""):
+            bits.append(f"{key}={value}")
+    session = payload.get("sessionId")
+    if session and "sessionId" not in " ".join(bits):
+        bits.append(f"session={session}")
+    return f"chromium {method} {' '.join(bits)}".rstrip()
 
 
 def _prepare_page(call, session_id: str, width: int, height: int) -> None:
@@ -820,6 +855,9 @@ def run_chromium_feeder(
                 except json.JSONDecodeError:
                     continue
                 if payload.get("id") != expect:
+                    line = note_event(payload)
+                    if line:
+                        log.warning("%s", line)
                     continue
                 if payload.get("error"):
                     raise OSError(str(payload["error"]))
@@ -827,6 +865,10 @@ def run_chromium_feeder(
                 return result if isinstance(result, dict) else {}
             return {}
 
+        try:
+            call("Target.setDiscoverTargets", {"discover": True}, deadline=time.monotonic() + 5)
+        except OSError as exc:
+            log.info("target events are off: %s", exc)
         session_id, reason = _attach_page(call, holder, url)
         if not session_id:
             if holder.stop.is_set():
@@ -842,11 +884,13 @@ def run_chromium_feeder(
         wrong_size_noted = False
         while not holder.stop.is_set():
             started = time.monotonic()
+            # A renderer that never answers would otherwise hold the layer
+            # until the socket closed; this restarts it instead.
             result = call("Page.captureScreenshot", {
                 "format": "png",
                 "omitBackground": True,
                 "fromSurface": True,
-            }, session_id)
+            }, session_id, deadline=started + SCREENSHOT_WAIT)
             frame = result.get("data")
             if isinstance(frame, str):
                 png = base64.b64decode(frame)
@@ -1022,7 +1066,7 @@ def probe_html(url: str, seconds: float, browser: str | None = None, width: int 
     if not browser:
         print("no Chromium or Google Chrome on PATH", flush=True)
         return 2
-    with tempfile.TemporaryDirectory(prefix="nexencoder-probe-") as temp:
+    with tempfile.TemporaryDirectory(prefix="nexencoder-probe-", ignore_cleanup_errors=True) as temp:
         slot = Path(temp) / "probe-0.nxcg"
         writer = SlotWriter(slot, width, height)
         holder = _Running()
@@ -1038,15 +1082,19 @@ def probe_html(url: str, seconds: float, browser: str | None = None, width: int 
         holder.thread.start()
         first = None
         frame = None
-        while time.monotonic() - begin < seconds and holder.thread.is_alive():
-            got = read_slot(slot, width, height)
-            if got is not None:
-                frame = got
-                if first is None:
-                    first = time.monotonic() - begin
-                    print(f"first frame after {first:.1f}s (slot seq {writer.seq})", flush=True)
-            time.sleep(0.25)
-        holder.halt()
+        try:
+            while time.monotonic() - begin < seconds and holder.thread.is_alive():
+                got = read_slot(slot, width, height)
+                if got is not None:
+                    frame = got
+                    if first is None:
+                        first = time.monotonic() - begin
+                        print(f"first frame after {first:.1f}s (slot seq {writer.seq})", flush=True)
+                time.sleep(0.25)
+        except KeyboardInterrupt:
+            print("stopping", flush=True)
+        finally:
+            holder.halt()
         if frame is None:
             print("no frame was painted", flush=True)
             return 1

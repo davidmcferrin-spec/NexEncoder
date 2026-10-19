@@ -18,6 +18,7 @@ from nexencoder.cgfeed import (
     chromium_env,
     chromium_profile,
     describe_targets,
+    note_event,
     prepare_profile,
     browser_socket_url,
     choose_page_target,
@@ -152,16 +153,35 @@ def _browser(script, log=None):
     return call, calls
 
 
-def test_attach_asks_for_a_page_when_the_browser_has_none():
+def test_attach_waits_for_chromes_own_page_before_asking_for_one():
     url = "http://127.0.0.1/cg/bug.html"
+    listings = iter([
+        {"targetInfos": []},
+        {"targetInfos": []},
+        {"targetInfos": [{"type": "page", "targetId": "own", "url": url}]},
+    ])
+    call, calls = _browser({
+        "Target.getTargets": lambda params: next(listings),
+        "Target.attachToTarget": {"sessionId": "s1"},
+        "Page.enable": {},
+        "Inspector.enable": {},
+    })
+    assert _attach_page(call, _Running(), url, wait=5) == ("s1", "")
+    assert calls.count("Target.getTargets") == 3
+    assert "Target.createTarget" not in calls
+    assert calls[-3:] == ["Target.attachToTarget", "Page.enable", "Inspector.enable"]
+
+    # Only a browser that never shows a page is asked for one, after the wait.
     call, calls = _browser({
         "Target.getTargets": {"targetInfos": []},
         "Target.createTarget": {"targetId": "fresh"},
-        "Target.attachToTarget": {"sessionId": "s1"},
+        "Target.attachToTarget": {"sessionId": "s2"},
         "Page.enable": {},
+        "Inspector.enable": OSError("no Inspector"),
     })
-    assert _attach_page(call, _Running(), url, wait=2) == ("s1", "")
-    assert calls == ["Target.getTargets", "Target.createTarget", "Target.attachToTarget", "Page.enable"]
+    assert _attach_page(call, _Running(), url, wait=0.5) == ("s2", "")
+    assert calls.count("Target.getTargets") >= 2
+    assert calls.index("Target.createTarget") > calls.index("Target.getTargets")
 
 
 def test_attach_uses_the_page_chrome_opened_and_navigates_a_blank_one():
@@ -170,6 +190,7 @@ def test_attach_uses_the_page_chrome_opened_and_navigates_a_blank_one():
         "Target.getTargets": {"targetInfos": [{"type": "page", "targetId": "blank", "url": "about:blank"}]},
         "Target.attachToTarget": {"sessionId": "s2"},
         "Page.enable": {},
+        "Inspector.enable": {},
         "Page.navigate": {"frameId": "f"},
     })
     assert _attach_page(call, _Running(), url, wait=2) == ("s2", "")
@@ -219,6 +240,17 @@ def test_page_viewport_is_the_slot_not_the_window():
 def test_png_size_reads_the_header():
     assert png_size(_png(2, 1, bytes([0, 255, 0, 128, 255, 0, 0, 0]))) == (2, 1)
     assert png_size(b"not a png") == (0, 0)
+
+
+def test_browser_events_that_explain_a_lost_session_reach_the_journal():
+    assert note_event({"method": "Target.targetCrashed", "params": {"targetId": "t1", "status": "killed", "errorCode": 9}}) == (
+        "chromium Target.targetCrashed targetId=t1 status=killed errorCode=9"
+    )
+    assert note_event({"method": "Inspector.detached", "sessionId": "s1", "params": {"reason": "target_closed"}}) == (
+        "chromium Inspector.detached reason=target_closed session=s1"
+    )
+    assert note_event({"method": "Target.targetInfoChanged", "params": {}}) == ""
+    assert note_event({"id": 4, "result": {}}) == ""
 
 
 def test_describe_targets_is_one_line():
