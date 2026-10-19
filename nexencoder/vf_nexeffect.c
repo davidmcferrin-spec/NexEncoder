@@ -69,6 +69,8 @@ typedef struct NexEffectContext {
     uint8_t *field_src;
     uint8_t *field_warp;
     uint8_t *layer;
+    uint8_t *wait_cache;
+    int wait_kind;
     uint8_t *slot_cache[NX_SLOTS];
     uint32_t slot_seq[NX_SLOTS];
     int slot_cached[NX_SLOTS];
@@ -166,7 +168,7 @@ static int map_point(const double h[9], double x, double y, double *ox, double *
 
 static void sample_rgba(const uint8_t *src, int w, int h, double x, double y, uint8_t out[4])
 {
-    int x0, y0, x1, y1, x0c, y0c, c;
+    int x0, y0, x1, y1, x0c, y0c, c, wx, wy;
     double fx, fy;
     const uint8_t *p00, *p10, *p01, *p11;
     if (x < -0.5 || y < -0.5 || x >= w - 0.5 || y >= h - 0.5) {
@@ -185,31 +187,53 @@ static void sample_rgba(const uint8_t *src, int w, int h, double x, double y, ui
     p10 = src + (y0c * w + x1) * 4;
     p01 = src + (y1 * w + x0c) * 4;
     p11 = src + (y1 * w + x1) * 4;
+    wx = (int)(fx * 256.0);
+    wy = (int)(fy * 256.0);
     for (c = 0; c < 4; c++) {
-        double top = p00[c] * (1.0 - fx) + p10[c] * fx;
-        double bot = p01[c] * (1.0 - fx) + p11[c] * fx;
-        int value = (int)(top * (1.0 - fy) + bot * fy + 0.5);
-        if (value < 0) value = 0;
-        if (value > 255) value = 255;
-        out[c] = (uint8_t)value;
+        int top = p00[c] * (256 - wx) + p10[c] * wx;
+        int bot = p01[c] * (256 - wx) + p11[c] * wx;
+        out[c] = (uint8_t)((top * (256 - wy) + bot * wy + 32768) >> 16);
     }
 }
 
 static void warp_rgba(const uint8_t *src, uint8_t *dst, int w, int h, const double corners[8])
 {
     double source[8], matrix[9];
-    int x, y;
+    double lo_x = corners[0], hi_x = corners[0], lo_y = corners[1], hi_y = corners[1];
+    int x, y, i, x_from, x_to, y_from, y_to, affine;
     memset(dst, 0, (size_t)w * h * 4);
     identity_corners(source, w, h);
     if (homography(corners, source, matrix) < 0)
         return;
-    for (y = 0; y < h; y++) {
-        for (x = 0; x < w; x++) {
-            double sx, sy;
+    /* Only the box around the squeezed picture can be non-zero; the rest of
+     * the frame stays cleared. */
+    for (i = 1; i < 4; i++) {
+        lo_x = FFMIN(lo_x, corners[i * 2]);
+        hi_x = FFMAX(hi_x, corners[i * 2]);
+        lo_y = FFMIN(lo_y, corners[i * 2 + 1]);
+        hi_y = FFMAX(hi_y, corners[i * 2 + 1]);
+    }
+    x_from = FFMAX(0, (int)floor(lo_x) - 1);
+    x_to = FFMIN(w, (int)ceil(hi_x) + 1);
+    y_from = FFMAX(0, (int)floor(lo_y) - 1);
+    y_to = FFMIN(h, (int)ceil(hi_y) + 1);
+    /* A plain squeeze or move has no perspective, so no divide per pixel. */
+    affine = fabs(matrix[6]) < 1e-12 && fabs(matrix[7]) < 1e-12 && fabs(matrix[8] - 1.0) < 1e-12;
+    for (y = y_from; y < y_to; y++) {
+        double sx = matrix[0] * (x_from + 0.5) + matrix[1] * (y + 0.5) + matrix[2];
+        double sy = matrix[3] * (x_from + 0.5) + matrix[4] * (y + 0.5) + matrix[5];
+        for (x = x_from; x < x_to; x++) {
             uint8_t pixel[4];
-            if (map_point(matrix, x + 0.5, y + 0.5, &sx, &sy) < 0)
-                continue;
-            sample_rgba(src, w, h, sx - 0.5, sy - 0.5, pixel);
+            if (affine) {
+                sample_rgba(src, w, h, sx - 0.5, sy - 0.5, pixel);
+                sx += matrix[0];
+                sy += matrix[3];
+            } else {
+                double px, py;
+                if (map_point(matrix, x + 0.5, y + 0.5, &px, &py) < 0)
+                    continue;
+                sample_rgba(src, w, h, px - 0.5, py - 0.5, pixel);
+            }
             memcpy(dst + ((size_t)y * w + x) * 4, pixel, 4);
         }
     }
@@ -655,16 +679,27 @@ static void draw_slate(uint8_t *dst, int w, int h)
 
 static void paint_waiting(uint8_t *dst, int w, int h, NexEffectContext *s)
 {
-    if (!strcmp(s->waiting, "bars")) {
-        draw_bars(dst, w, h);
-        return;
-    }
-    if (!strcmp(s->waiting, "loop") && s->loop_path[0] && strcmp(s->loop_path, "-") &&
+    int bars = !strcmp(s->waiting, "bars");
+    int kind = bars ? 1 : 2;
+    size_t bytes = (size_t)w * h * 4;
+    if (!bars && !strcmp(s->waiting, "loop") && s->loop_path[0] && strcmp(s->loop_path, "-") &&
         read_layer(s->loop_path, w, h, s->layer)) {
-        memcpy(dst, s->layer, (size_t)w * h * 4);
+        memcpy(dst, s->layer, bytes);
         return;
     }
-    draw_slate(dst, w, h);
+    /* Bars and the slate never change, so they are drawn once and copied. */
+    if (s->wait_cache && s->wait_kind == kind) {
+        memcpy(dst, s->wait_cache, bytes);
+        return;
+    }
+    if (bars)
+        draw_bars(dst, w, h);
+    else
+        draw_slate(dst, w, h);
+    if (s->wait_cache) {
+        memcpy(s->wait_cache, dst, bytes);
+        s->wait_kind = kind;
+    }
 }
 
 static void draw_video(uint8_t *dst, const uint8_t *video, size_t pixels, int covered)
@@ -797,6 +832,8 @@ static int config_input(AVFilterLink *inlink)
     s->field_src = av_malloc(bytes / 2 + 4);
     s->field_warp = av_malloc(bytes / 2 + 4);
     s->layer = av_malloc(bytes);
+    s->wait_cache = av_malloc(bytes);
+    s->wait_kind = 0;
     for (i = 0; i < NX_SLOTS; i++) {
         s->slot_cache[i] = av_malloc(bytes);
         s->slot_cached[i] = 0;
@@ -926,6 +963,7 @@ static av_cold void uninit(AVFilterContext *ctx)
     av_freep(&s->field_src);
     av_freep(&s->field_warp);
     av_freep(&s->layer);
+    av_freep(&s->wait_cache);
     for (int i = 0; i < NX_SLOTS; i++)
         av_freep(&s->slot_cache[i]);
 }

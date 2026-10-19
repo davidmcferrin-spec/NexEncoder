@@ -515,3 +515,13 @@ def test_filter_keeps_a_layer_through_a_rewrite_and_skips_hidden_work():
     # Live video that fills the frame is copied, and the waiting picture is not painted under it.
     assert "if (!covered)\n        paint_waiting" in source.replace("\r\n", "\n")
     assert "memcpy(dst, video, pixels * 4);" in source
+
+
+def test_filter_squeeze_only_warps_the_squeezed_box_and_caches_the_waiting_picture():
+    source = (Path(__file__).resolve().parent.parent / "nexencoder" / "vf_nexeffect.c").read_text(encoding="utf-8")
+    # warp_rgba walks the corners' bounding box, not the whole frame, and skips the divide for a plain squeeze.
+    assert "y_from" in source and "x_to" in source
+    assert "affine" in source
+    # The slate and bars are drawn once and copied afterwards.
+    assert "s->wait_cache && s->wait_kind == kind" in source
+    assert "av_freep(&s->wait_cache);" in source
