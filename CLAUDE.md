@@ -29,7 +29,7 @@ to SCTE-35) and shown on a low-latency WebRTC proxy preview via MediaMTX.
   Layer −5 is the waiting picture. Layer +5 is bars plus an ident. A tone replaces audio
   while bars are the picture. Preset corners are fractions of the frame.
   Up to four CG layers each take a level from −4 to +4; 0 is the video. HTML is painted live by
-  WPE or Chromium with alpha kept. An NDI source can occupy a layer when ndisrc is installed.
+  WPE or Chromium with alpha kept. Ubuntu 24.04 does not package WPE, so `setup.sh` installs Google Chrome for that path. An NDI source can occupy a layer when ndisrc is installed.
   One SDI fill/key pair, DeckLink inputs 3 and 4, is shared. `setup.sh` builds
   `decklink-configure` and `nexencoder-decklink-configure` sets the card to
   half-duplex inputs before those units open it, so a factory full-duplex Duo 2
@@ -39,7 +39,7 @@ to SCTE-35) and shown on a low-latency WebRTC proxy preview via MediaMTX.
   pinned TSDuck 3.45-4798, and the pinned MediaMTX binary. No pip, no venv. TSDuck is
   downloaded from the official release when `tsp` is not already on PATH.
   Desktop Video and the DeckLink SDK are installed from archives in `/home/nexstar`, not downloaded. Channel units restart forever; a stalled frame count restarts the pipeline.
-- Preview: MediaMTX. ffmpeg publishes RTSP to `127.0.0.1:8554`; the monitor page plays WHEP.
+- Preview: MediaMTX. A separate ffmpeg decodes the program multicast feed and publishes RTSP to `127.0.0.1:8554`; the monitor page plays WHEP. That picture is the SRT output, including squeeze, graphics, and bars. The preview process restarts on its own and does not restart the channel.
 
 ## Hardware (see README "Target hardware")
 - Host: Dell R440+ or Minisforum MS-01 (low-profile cards only). Card: DeckLink Duo 2 Mini or

@@ -10,6 +10,8 @@
 # SCTE-104 to the channel supervisor. The nexeffect filter is added for the
 # four-corner squeeze and CG stack. TSDuck 3.45-4798 is downloaded from the
 # official release and installed when tsp is not already on PATH.
+# Ubuntu 24.04 does not build the WPE GStreamer plugin. HTML CG then uses
+# Google Chrome, downloaded from Google when no Chromium binary is on PATH.
 # Desktop Video and the DeckLink SDK are installed from archives already in
 # /home/nexstar (or the home of the user who started this script). They are
 # not downloaded. decklink-configure and decklink-status are built from those
@@ -397,14 +399,36 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
     $SUDO apt-get update -qq
     $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${media_missing[@]}"
   fi
+  html_ready=0
   if apt-cache show gstreamer1.0-wpe >/dev/null 2>&1; then
-    if ! dpkg -s gstreamer1.0-wpe >/dev/null 2>&1; then
+    if dpkg -s gstreamer1.0-wpe >/dev/null 2>&1; then
+      html_ready=1
+    else
       log "installing gstreamer1.0-wpe for HTML CG"
-      $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gstreamer1.0-wpe \
-        || log "WARNING: gstreamer1.0-wpe did not install. HTML layers use Chromium when it is on PATH."
+      if $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gstreamer1.0-wpe; then
+        html_ready=1
+      else
+        log "WARNING: gstreamer1.0-wpe did not install."
+      fi
     fi
   else
-    log "WARNING: gstreamer1.0-wpe is not in apt. HTML layers use Chromium when it is on PATH."
+    log "gstreamer1.0-wpe is not in apt on this release."
+  fi
+  if [ "$html_ready" -eq 0 ]; then
+    if command -v google-chrome-stable >/dev/null 2>&1 || command -v google-chrome >/dev/null 2>&1 \
+      || command -v chromium >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1; then
+      log "HTML CG will use the browser already on PATH"
+    elif [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "amd64" ]; then
+      log "installing Google Chrome for HTML CG"
+      chrome_tmp="$(mktemp -d)"
+      chrome_deb="google-chrome-stable_current_amd64.deb"
+      curl -fsSL -o "$chrome_tmp/$chrome_deb" "https://dl.google.com/linux/direct/${chrome_deb}"
+      $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$chrome_tmp/$chrome_deb" \
+        || die "Google Chrome did not install. HTML CG needs it when gstreamer1.0-wpe is unavailable."
+      rm -rf "$chrome_tmp"
+    else
+      log "WARNING: no Chrome package for $(uname -m). HTML layers stay transparent until a Chromium binary is on PATH."
+    fi
   fi
   if ! gst-inspect-1.0 ndisrc >/dev/null 2>&1; then
     log "WARNING: GStreamer ndisrc is not installed. NDI CG needs the NDI SDK and that plugin. The layer stays transparent until the receiver is present."
@@ -446,7 +470,8 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
     fi
   fi
 
-  $SUDO mkdir -p /var/lib/nexencoder/hls /var/lib/nexencoder/state /etc/nexencoder
+  $SUDO mkdir -p /var/lib/nexencoder/hls /var/lib/nexencoder/state /var/lib/nexencoder/chrome /etc/nexencoder
+  $SUDO chmod 0755 /var/lib/nexencoder/chrome
   install_operator_pages
   if [ ! -f /var/lib/nexencoder/config.json ]; then
     $SUDO cp config/encoder.json /var/lib/nexencoder/config.json

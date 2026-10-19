@@ -7,7 +7,7 @@ Blackmagic DeckLink Duo / Duo 2.
 - Outputs per input: SRT (caller or listener) or HLS (push or pull), H.264 6-18 Mbps + AAC stereo
 - Captions: 708 re-embedded as A/53 SEI; 608 carried inside the 708 CDP
 - SCTE: 104 translated to SCTE-35 splice_info_section, muxed on a data PID
-- Monitor: 25-50% proxy over WebRTC (MediaMTX) with caption and SCTE sideband over WebSocket
+- Monitor: the program picture over WebRTC (MediaMTX), with caption and SCTE sideband. Squeeze, graphics, and bars are in that picture. The monitor process can restart without stopping SRT.
 
 No Node. No Docker. Runs on the host under systemd (Ubuntu 24.04 LTS).
 
@@ -25,7 +25,9 @@ directory of the user who ran sudo) into `/opt/decklink-sdk`, and installs the
 `desktopvideo` package from `Blackmagic_Desktop_Video_Linux_*.tar.gz` in that same
 place. Neither archive is downloaded. It also installs pinned TSDuck 3.45-4798
 (the Ubuntu 24.04 package from the official release, skipped when `tsp` is already
-on `PATH`), a pinned MediaMTX v1.21.1 binary, `nexencoder-console.service`, the
+on `PATH`), a pinned MediaMTX v1.21.1 binary, and Google Chrome when
+`gstreamer1.0-wpe` is not in apt (Ubuntu 24.04 does not build that plugin), plus
+`nexencoder-console.service`, the
 `nexencoder-channel@` template, `nexencoder-decklink-configure.service`, and
 `nexencoder-noc.service`. `setup.sh` builds `decklink-configure` and `decklink-status`
 from the SDK headers. Before the channels start, `decklink-configure` sets Duo 2 and
@@ -60,8 +62,10 @@ host details such as `lsmod`, `dmesg`, and DeckLink status, for the last 24, 36,
 or the whole journal. URL credentials and password fields are redacted and the NOC token is left
 out. The Inputs page can restart `nexencoder-channel@A` or `@B` after a save.
 
-The monitor page plays each input from MediaMTX at `http://<host>:8889/inputA/whep` and
-`inputB`. The channel posts caption and splice notes to `/api/sideband` as VANC arrives.
+The monitor page plays each program from MediaMTX at `http://<host>:8889/inputA/whep` and
+`inputB`. That proxy decodes the same local feed SRT sends, so squeeze, graphics, and bars
+match the output. Restarting the proxy does not restart the encode. The channel posts
+caption and splice notes to `/api/sideband` as VANC arrives.
 `POST /api/channels/A/scte` translates a SCTE-104 message and sends the SCTE-35 section to
 the channel's spliceinject port. spliceinject listens on `127.0.0.1:19101` (A)
 and `:19102` (B).

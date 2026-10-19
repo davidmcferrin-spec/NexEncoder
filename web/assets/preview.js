@@ -19,6 +19,22 @@
     });
   }
 
+  function drop(id, pc) {
+    if (players[id] !== pc) return;
+    delete players[id];
+    try { pc.close(); } catch (err) { /* already closed */ }
+    var video = document.getElementById("video-" + id);
+    var wait = document.getElementById("wait-" + id);
+    if (video) {
+      video.srcObject = null;
+      video.hidden = true;
+    }
+    if (wait) {
+      wait.hidden = false;
+      wait.textContent = "Waiting for the proxy";
+    }
+  }
+
   function play(id, url) {
     var video = document.getElementById("video-" + id);
     var wait = document.getElementById("wait-" + id);
@@ -32,6 +48,11 @@
       if (stream && video.srcObject !== stream) video.srcObject = stream;
       video.hidden = false;
       if (wait) wait.hidden = true;
+      event.track.onended = function () { drop(id, pc); };
+    };
+    pc.onconnectionstatechange = function () {
+      var state = pc.connectionState;
+      if (state === "failed" || state === "disconnected" || state === "closed") drop(id, pc);
     };
     pc.createOffer().then(function (offer) {
       return pc.setLocalDescription(offer);
@@ -49,13 +70,7 @@
     }).then(function (sdp) {
       return pc.setRemoteDescription({ type: "answer", sdp: sdp });
     }).catch(function () {
-      try { pc.close(); } catch (err) { /* already closed */ }
-      delete players[id];
-      video.hidden = true;
-      if (wait) {
-        wait.hidden = false;
-        wait.textContent = "Waiting for the proxy";
-      }
+      drop(id, pc);
     });
   }
 

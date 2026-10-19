@@ -1,8 +1,10 @@
 """FFmpeg and TSDuck argv for one HD-SDI input.
 
-DeckLink opens exclusively, so the program encode and the WebRTC proxy are
-two outputs of one ffmpeg process. TSDuck inserts SCTE-35 on the MPEG-TS
-that ffmpeg writes to its stdout. Argv builders do not spawn processes.
+DeckLink opens exclusively, so one ffmpeg writes the program MPEG-TS.
+TSDuck inserts SCTE-35 on that stream and publishes the local feed that
+SRT and HLS read. The WebRTC proxy is a later process: it decodes that
+same feed, so the monitor shows the picture SRT is sending. Argv builders
+do not spawn processes.
 """
 
 from __future__ import annotations
@@ -40,6 +42,15 @@ def preview_path(channel_id: str) -> str:
 
 def preview_rtsp(channel_id: str) -> str:
     return f"{PREVIEW_RTSP}/{preview_path(channel_id)}"
+
+
+def feed_url(channel_id: str) -> str:
+    """Multicast program feed. SRT, HLS, and the monitor each join it."""
+    feed = FEED_PORT[channel_id]
+    return (
+        f"udp://{FEED_ADDR}:{feed}?localaddr={FEED_LOCAL}"
+        f"&reuse=1&fifo_size=2000000&overrun_nonfatal=1"
+    )
 
 
 def whep_url(channel_id: str, host: str = "127.0.0.1", port: int = 8889) -> str:
@@ -86,32 +97,34 @@ def _tone_filter(hold_path: str, pcm_path: str | None) -> str:
     )
 
 
+def _preview_filter() -> str:
+    """Display size for the monitor. The program raster is unchanged."""
+    return (
+        f"yadif=mode=0:parity=-1:deint=interlaced,"
+        f"scale={PREVIEW_SIZE}:force_original_aspect_ratio=decrease,"
+        f"fps=30,format=yuv420p"
+    )
+
+
 def _filter_graph(interlaced: bool, effect_state: str, hold_path: str, pcm_path: str | None = None, audio_pad: str = "0:a") -> str:
-    """Squeeze and CG run on the program before the preview split.
+    """Squeeze and CG run on the program frame.
 
     The still is a second branch of the input frame, taken before the
     effect, so the builder can place corners on the clean picture. A/53
     side data stays on the program frame: ``nexeffect`` copies it after the
     stack is flattened. SCTE-104 is forwarded by the demuxer and never
     enters this graph. ``nextone`` swaps in a tone while color bars are up.
+    The monitor is not a branch of this graph.
     """
-    preview = (
-        f"yadif=mode=0:parity=-1:deint=interlaced,"
-        f"scale={PREVIEW_SIZE}:force_original_aspect_ratio=decrease,"
-        f"fps=30,format=yuv420p"
-    )
     state = escape_filter_value(effect_state)
     hold = escape_filter_value(hold_path)
     field = 1 if interlaced else 0
     return (
         "[0:v]split=2[vsrc][vstill];"
-        f"[vsrc]nexeffect=state={state}:interlaced={field}:hold={hold}[vfx];"
-        "[vfx]split=2[vprog][vp0];"
-        f"[vp0]{preview}[vprev];"
+        f"[vsrc]nexeffect=state={state}:interlaced={field}:hold={hold}[vprog];"
         f"[vstill]fps=1/{STILL_SECONDS},"
         f"scale={PREVIEW_SIZE}:force_original_aspect_ratio=decrease,format=yuv420p[vstillout];"
-        f"[{audio_pad}]{_tone_filter(hold_path, pcm_path)}[atone];"
-        "[atone]asplit=2[aprog][aprev]"
+        f"[{audio_pad}]{_tone_filter(hold_path, pcm_path)}[aprog]"
     )
 
 
@@ -127,10 +140,11 @@ def capture_argv(
     hold_path: str | None = None,
     pcm_path: str | None = None,
 ) -> list[str]:
-    """One DeckLink open: H.264/AAC MPEG-TS on stdout, proxy RTSP beside it.
+    """One DeckLink open: H.264/AAC MPEG-TS on stdout.
 
     yuv422p10 keeps the VANC lines so CEA-708 CDPs become A/53 side data.
     The still JPEG is rewritten every few seconds for the effect builder.
+    The monitor publishes from the program feed, not from this process.
     """
     mode = signal_mode(format_name)
     progress = ["-progress", progress_path] if progress_path else []
@@ -152,12 +166,6 @@ def capture_argv(
         "-f", "mpegts",
         "-mpegts_flags", "+resend_headers",
         "pipe:1",
-        "-map", "[vprev]", "-map", "[aprev]",
-        "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
-        "-profile:v", "baseline", "-pix_fmt", "yuv420p", "-g", "30", "-b:v", "1500k",
-        "-c:a", "libopus", "-b:a", "96k", "-ar", "48000", "-ac", "2", "-application", "lowdelay",
-        "-f", "rtsp", "-rtsp_transport", "tcp",
-        preview_rtsp(channel_id),
         "-map", "[vstillout]", "-an",
         "-c:v", "mjpeg", "-q:v", "5",
         "-f", "image2", "-update", "1", "-atomic_writing", "1",
@@ -187,17 +195,9 @@ def clock_argv(
     hold = hold_path or f"/var/lib/nexencoder/state/{channel_id}.wait"
     color = f"color=c=black:s={mode.width}x{mode.height}:r={lavfi_rate(mode)}"
     field = 1 if mode.interlaced else 0
-    preview = (
-        f"yadif=mode=0:parity=-1:deint=interlaced,"
-        f"scale={PREVIEW_SIZE}:force_original_aspect_ratio=decrease,"
-        f"fps=30,format=yuv420p"
-    )
     graph = (
-        f"[0:v]nexeffect=state={escape_filter_value(state)}:interlaced={field}:hold={escape_filter_value(hold)}[vfx];"
-        "[vfx]split=2[vprog][vp0];"
-        f"[vp0]{preview}[vprev];"
-        f"[1:a]{_tone_filter(hold, pcm_path)}[atone];"
-        "[atone]asplit=2[aprog][aprev]"
+        f"[0:v]nexeffect=state={escape_filter_value(state)}:interlaced={field}:hold={escape_filter_value(hold)}[vprog];"
+        f"[1:a]{_tone_filter(hold, pcm_path)}[aprog]"
     )
     return [
         ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "warning",
@@ -210,7 +210,22 @@ def clock_argv(
         "-f", "mpegts",
         "-mpegts_flags", "+resend_headers",
         "pipe:1",
-        "-map", "[vprev]", "-map", "[aprev]",
+    ]
+
+
+def preview_argv(channel_id: str, ffmpeg: str = "ffmpeg") -> list[str]:
+    """Decode the program feed and publish the monitor.
+
+    Squeeze, graphics, bars, and the ident are already in this MPEG-TS,
+    which is the stream SRT sends. Restarting this process does not
+    restart the program encode.
+    """
+    return [
+        ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "warning",
+        "-fflags", "+genpts+discardcorrupt",
+        "-f", "mpegts", "-i", feed_url(channel_id),
+        "-map", "0:v:0", "-map", "0:a:0?",
+        "-vf", _preview_filter(),
         "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
         "-profile:v", "baseline", "-pix_fmt", "yuv420p", "-g", "30", "-b:v", "1500k",
         "-c:a", "libopus", "-b:a", "96k", "-ar", "48000", "-ac", "2", "-application", "lowdelay",
@@ -289,8 +304,7 @@ def hls_argv(
     publish_dir: str,
     ffmpeg: str = "ffmpeg",
 ) -> list[str]:
-    feed = FEED_PORT[channel_id]
-    src = f"udp://{FEED_ADDR}:{feed}?localaddr={FEED_LOCAL}&reuse=1&fifo_size=2000000&overrun_nonfatal=1"
+    src = feed_url(channel_id)
     argv = [
         ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "warning",
         "-f", "mpegts", "-i", src,

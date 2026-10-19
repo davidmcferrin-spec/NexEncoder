@@ -1,11 +1,12 @@
 """Capture, splice, and delivery argv. Nothing here opens a DeckLink device."""
 
 import subprocess
+import threading
 
 import pytest
 
 from nexencoder import scte104 as s104
-from nexencoder.channel import EXIT_CONFIG, progress_target, run_channel
+from nexencoder.channel import EXIT_CONFIG, progress_target, run_channel, run_preview
 from nexencoder.channels import save_config
 from nexencoder.pipeline import (
     SRT_STATS_INTERVAL_MS,
@@ -13,6 +14,7 @@ from nexencoder.pipeline import (
     capture_argv,
     clock_argv,
     egress_argv,
+    preview_argv,
     sections_from_mom,
     splice_argv,
 )
@@ -20,7 +22,7 @@ from nexencoder.scte35 import SpliceNull, parse_section
 from nexencoder.signal import h264_level, signal_mode
 
 
-def test_capture_keeps_vanc_and_tees_preview():
+def test_capture_keeps_vanc_and_leaves_the_monitor_off_this_process():
     argv = capture_argv("A", "DeckLink Duo (1)", "1080i59.94", 8, progress_path="/run/A.progress")
     assert argv[0] == "ffmpeg"
     assert argv[argv.index("-raw_format") + 1] == "yuv422p10"
@@ -28,13 +30,14 @@ def test_capture_keeps_vanc_and_tees_preview():
     assert argv[argv.index("-i") + 1] == "DeckLink Duo (1)"
     assert argv[argv.index("-a53cc") + 1] == "1"
     assert "pipe:1" in argv
-    assert "rtsp://127.0.0.1:8554/inputA" in argv
-    assert "libopus" in argv
+    assert "8554" not in " ".join(argv)
+    assert "libopus" not in argv
     assert "-progress" in argv
     assert "+ildct+ilme" in argv
     graph = argv[argv.index("-filter_complex") + 1]
     assert graph.index("[0:v]split=2[vsrc][vstill]") < graph.index("nexeffect")
-    assert graph.index("[vfx]split=2[vprog]") > graph.index("nexeffect")
+    assert graph.index("nexeffect") < graph.index("[vprog]")
+    assert "[vprev]" not in graph
     assert "interlaced=1" in graph
     assert "nextone=hold=" in graph
     assert argv[argv.index("-signal_loss_action") + 1] == "none"
@@ -45,12 +48,14 @@ def test_progressive_capture_skips_interlace_flags():
     argv = capture_argv("B", "DeckLink Duo (2)", "720p59.94", 12)
     assert argv[argv.index("-format_code") + 1] == "hp59"
     assert "+ildct+ilme" not in argv
-    assert "rtsp://127.0.0.1:8554/inputB" in argv
+    assert "8554" not in " ".join(argv)
     graph = argv[argv.index("-filter_complex") + 1]
     assert "interlaced=0" in graph
     assert h264_level(signal_mode("1080i59.94")) == "4.1"
     assert h264_level(signal_mode("1080p59.94")) == "4.2"
     assert signal_mode("1080p59.94").format_code == "Hp59"
+    assert signal_mode("1080p60").format_code == "Hp60"
+    assert h264_level(signal_mode("1080p60")) == "4.2"
     assert signal_mode("1080p50").format_code == "Hp50"
 
 
@@ -61,8 +66,41 @@ def test_srt_input_keeps_an_encode_clock_without_a_still():
     assert "color=c=black:s=1920x1080:r=60000/1001" in argv
     assert any(item.startswith("anullsrc=") for item in argv)
     assert "nexeffect=" in graph and "nextone=" in graph
-    assert "[vstill]" not in graph
+    assert "[vstill]" not in graph and "[vprev]" not in graph
+    assert "8554" not in " ".join(argv)
     assert "image2" not in argv
+
+
+def test_preview_decodes_the_program_feed():
+    argv = preview_argv("A")
+    assert argv[argv.index("-i") + 1].startswith("udp://239.255.1.1:19001?localaddr=127.0.0.1")
+    assert "nexeffect" not in " ".join(argv)
+    assert "decklink" not in argv
+    assert argv[argv.index("-f") + 1] == "mpegts"
+    assert argv[-1] == "rtsp://127.0.0.1:8554/inputA"
+    assert "libopus" in argv
+    assert "yadif=" in argv[argv.index("-vf") + 1]
+    other = preview_argv("B")
+    assert other[other.index("-i") + 1].startswith("udp://239.255.1.1:19002?localaddr=127.0.0.1")
+    assert other[-1] == "rtsp://127.0.0.1:8554/inputB"
+
+
+def test_preview_exit_restarts_only_the_monitor():
+    calls = []
+    stop = threading.Event()
+
+    def spawn(argv, **_kwargs):
+        calls.append(argv)
+        return _Proc()
+
+    def pause(_seconds):
+        if len(calls) >= 2:
+            stop.set()
+
+    run_preview("A", stop, spawn, pause)
+    assert len(calls) == 2
+    assert all(item[-1] == "rtsp://127.0.0.1:8554/inputA" for item in calls)
+    assert all("pipe:1" not in item for item in calls)
 
 
 def test_splice_and_srt_listener():
@@ -143,6 +181,7 @@ def test_run_channel_starts_capture_splice_and_egress(tmp_path):
     assert [item[0][0] for item in calls] == ["ffmpeg", "tsp", "tsp"]
     assert calls[0][1]["stdout"] is subprocess.PIPE
     assert calls[2][1]["stdin"] is pipes[0]
+    assert "8554" not in " ".join(calls[0][0])
     assert pipes[0].closed is True
     assert "--listener" in calls[1][0]
     assert str(tmp_path / "state" / "A.progress") in calls[0][0]
@@ -250,6 +289,26 @@ def test_exec_failure_is_retried(tmp_path):
     assert code == 0
     assert calls["n"] == 4
     assert pauses == [2]
+
+
+def test_a_dead_monitor_does_not_restart_the_program(tmp_path):
+    program = []
+
+    def spawn(argv, **kwargs):
+        proc = _Proc()
+        if kwargs.get("stdout") is subprocess.PIPE:
+            proc.stdout = type("Pipe", (), {"close": lambda self: None})()
+        if argv[0] == "ffmpeg" and "pipe:1" in argv:
+            program.append(argv)
+        return proc
+
+    code = run_channel(
+        "A", tmp_path / "missing.json", tmp_path / "hls", tmp_path / "state",
+        spawn=spawn, cycles=1, install_signals=False, manage_preview=True,
+        pause=lambda _seconds: None, notify=lambda _msg: None,
+    )
+    assert code == 0
+    assert len(program) == 1
 
 
 def test_progress_target_uses_a_pipe_on_the_service():

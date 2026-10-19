@@ -124,6 +124,7 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     assert 'id="sideband-A"' in monitor and 'id="sideband-B"' in monitor
     assert 'id="sideband-log"' not in monitor
     assert 'getElementById("sideband-"' in preview
+    assert "track.onended" in preview and "players[id] !== pc" in preview
     inputs = (WEB / "inputs.php").read_text(encoding="utf-8")
     assert 'id="lock-A"' in inputs and 'id="lock-B"' in inputs
     assert 'id="restart-A"' in inputs and 'id="restart-B"' in inputs

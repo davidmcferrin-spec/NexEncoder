@@ -49,7 +49,7 @@ header('X-Content-Type-Options: nosniff');
     <div class="page-head">
       <div>
         <h1>Monitor</h1>
-        <p class="lead">Low-latency proxy for both inputs. The player uses the MediaMTX WebRTC endpoint on port 8889.</p>
+        <p class="lead">The program output, including squeeze, graphics, and bars. The player uses the MediaMTX WebRTC endpoint on port 8889.</p>
       </div>
     </div>
     <div class="preview-grid">

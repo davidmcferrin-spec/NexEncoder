@@ -67,6 +67,7 @@ header('X-Content-Type-Options: nosniff');
           <option value="1080i59.94">1080i 59.94</option>
           <option value="1080i50">1080i 50</option>
           <option value="1080p59.94">1080p 59.94</option>
+          <option value="1080p60">1080p 60</option>
           <option value="1080p50">1080p 50</option>
           <option value="720p59.94">720p 59.94</option>
           <option value="720p50">720p 50</option>
@@ -108,6 +109,7 @@ header('X-Content-Type-Options: nosniff');
           <option value="1080i59.94">1080i 59.94</option>
           <option value="1080i50">1080i 50</option>
           <option value="1080p59.94">1080p 59.94</option>
+          <option value="1080p60">1080p 60</option>
           <option value="1080p50">1080p 50</option>
           <option value="720p59.94">720p 59.94</option>
           <option value="720p50">720p 50</option>

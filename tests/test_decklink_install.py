@@ -87,3 +87,11 @@ def test_setup_downloads_pinned_tsduck():
     assert "332ae85ec2fce378ae9d2ae872606a38192aeb62da6edcf784ce6466b780295f" in script
     assert "SCTE-35 insertion needs TSDuck from https://tsduck.io/" not in script
     assert "TSDuck is checked for, not downloaded" not in script
+
+
+def test_setup_installs_chrome_when_wpe_is_not_packaged():
+    script = Path("setup.sh").read_text(encoding="utf-8")
+    assert "gstreamer1.0-wpe" in script
+    assert "https://dl.google.com/linux/direct/${chrome_deb}" in script
+    assert 'chrome_deb="google-chrome-stable_current_amd64.deb"' in script
+    assert "HTML CG needs it when gstreamer1.0-wpe is unavailable." in script

@@ -44,7 +44,7 @@ from .livefeed import (
     srt_ingest_argv,
     watch_decklink_signal,
 )
-from .pipeline import VANC_PORT, capture_argv, clock_argv, egress_argv, splice_argv
+from .pipeline import VANC_PORT, capture_argv, clock_argv, egress_argv, preview_argv, splice_argv
 from .signal import signal_mode
 from .srtstats import atomic_json, redact_secrets, start_srt_stats_reader, tsp_supports_srt_stats
 from .status import parse_ffmpeg_progress, progress_frame
@@ -149,6 +149,28 @@ def _running(proc: subprocess.Popen | None) -> bool:
     return proc is not None and proc.poll() is None
 
 
+def run_preview(channel_id: str, stop: threading.Event, spawn, pause) -> None:
+    """Publish the monitor from the program feed until stop is set.
+
+    This process is not one of the encode children. When it exits, only
+    the monitor is started again. The SRT output keeps running.
+    """
+    while not stop.is_set():
+        try:
+            proc = spawn(preview_argv(channel_id))
+        except OSError as exc:
+            log.warning("channel %s preview failed to start: %s", channel_id, exc)
+            pause(1)
+            continue
+        while proc.poll() is None and not stop.is_set():
+            stop.wait(0.5)
+        if stop.is_set():
+            _stop_children([proc], pause)
+            return
+        log.warning("channel %s preview exited code=%s; restarting", channel_id, proc.poll())
+        pause(1)
+
+
 def note_fault(state_dir: Path | None, channel_id: str, message: str) -> None:
     """Remember the latest pipeline fault for the NOC agent."""
     if state_dir is None:
@@ -190,6 +212,7 @@ def run_channel(
     vanc_listen: bool = False,
     manage_effects: bool = False,
     manage_live: bool = False,
+    manage_preview: bool = False,
     srt_statistics: bool | None = None,
 ) -> int:
     config = load_config(config_path)
@@ -262,6 +285,17 @@ def run_channel(
     stopping = False
     vanc_stop = threading.Event()
     effect_stop = threading.Event()
+    preview_stop = threading.Event()
+    preview_thread = None
+    if manage_preview:
+        preview_thread = threading.Thread(
+            target=run_preview,
+            args=(channel_id, preview_stop, spawn, pause),
+            name="nexencoder-preview",
+            daemon=True,
+        )
+        preview_thread.start()
+        log.info("channel %s monitor reading the program feed", channel_id)
     if manage_effects and state_dir is not None:
         threading.Thread(
             target=supervise,
@@ -306,6 +340,7 @@ def run_channel(
         stopping = True
         vanc_stop.set()
         effect_stop.set()
+        preview_stop.set()
         _stop_children(children, pause)
 
     if install_signals:
@@ -393,6 +428,9 @@ def run_channel(
             delay = min(delay * 2, backoff_cap)
     vanc_stop.set()
     effect_stop.set()
+    preview_stop.set()
+    if preview_thread is not None:
+        preview_thread.join(timeout=5)
     if vanc_listen:
         if previous_port is None:
             os.environ.pop("NEXENCODER_VANC_PORT", None)
@@ -415,6 +453,7 @@ def main(argv: list[str] | None = None) -> int:
         vanc_listen=(os.name == "posix"),
         manage_effects=(os.name == "posix"),
         manage_live=(os.name == "posix"),
+        manage_preview=(os.name == "posix"),
     )
 
 

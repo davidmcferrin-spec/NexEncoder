@@ -215,10 +215,14 @@ def key_argv(format_code: str) -> list[str]:
 
 
 def chromium_argv(browser: str, port: int, url: str, width: int, height: int) -> list[str]:
+    # The console service is root. Chrome refuses that sandbox, and each layer
+    # needs its own profile or the second page loses the singleton lock.
     return [
         browser, "--headless=new", "--disable-gpu", "--hide-scrollbars",
+        "--no-sandbox", "--disable-dev-shm-usage",
         "--no-first-run", "--force-device-scale-factor=1",
         "--default-background-color=00000000",
+        f"--user-data-dir=/var/lib/nexencoder/chrome/{port}",
         f"--remote-debugging-port={port}",
         f"--window-size={width},{height}",
         url,

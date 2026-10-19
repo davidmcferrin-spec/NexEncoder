@@ -6,10 +6,11 @@ from nexencoder.detect import detect_channel, note_source_line, parse_probe, ras
 from nexencoder.effects import signal_path, write_flag
 
 
-def test_geometry_maps_only_the_six_rasters():
+def test_geometry_maps_the_supported_rasters():
     assert raster_from_geometry(1920, 1080, 29.97, True) == "1080i59.94"
     assert raster_from_geometry(1920, 1080, 25, True) == "1080i50"
     assert raster_from_geometry(1920, 1080, 59.94, False) == "1080p59.94"
+    assert raster_from_geometry(1920, 1080, 60, False) == "1080p60"
     assert raster_from_geometry(1920, 1080, 50, False) == "1080p50"
     assert raster_from_geometry(1280, 720, 59.94, False) == "720p59.94"
     assert raster_from_geometry(1280, 720, 50, False) == "720p50"
@@ -36,6 +37,11 @@ def test_decklink_banner_and_status_json():
         "DeckLink Duo (2)",
     )
     assert status["format"] == "720p50"
+    integer = parse_probe(
+        json.dumps({"devices": [{"name": "DeckLink Duo (1)", "input_locked": True, "input_mode": "1080p60"}]}),
+        "DeckLink Duo (1)",
+    )
+    assert integer["ok"] is True and integer["format"] == "1080p60"
 
 
 def test_srt_caller_note_is_what_auto_saves(tmp_path):

@@ -25,7 +25,7 @@ shared CPU. There is no far-end trunk. Delivery is toward a CDN.
 | SCTE-35 | TSDuck `tsp` `spliceinject` |
 | SRT egress | TSDuck `tsp -O srt` (caller or listener, 1500 ms latency). Not FFmpeg. Not GStreamer. |
 | HLS egress | FFmpeg `-f hls` copy. Push is HTTP PUT. Pull writes `/var/lib/nexencoder/hls/<id>/index.m3u8` with 2 second segments. |
-| Preview | The encode process publishes RTSP to MediaMTX at `rtsp://127.0.0.1:8554/inputA` (and `inputB`). WHEP is on port 8889. |
+| Preview | A separate ffmpeg decodes the program feed and publishes RTSP to MediaMTX at `rtsp://127.0.0.1:8554/inputA` (and `inputB`). WHEP is on port 8889. Restarting that proxy does not restart the channel. |
 
 GStreamer is installed for HTML CG and NDI layers. It is not on the program encode or
 the CDN egress. `pipeline.gstreamer` is `false` on both outputs.

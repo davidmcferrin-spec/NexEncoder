@@ -25,6 +25,7 @@ _LABELS = {
     "1080i59.94": "1080i 59.94",
     "1080i50": "1080i 50",
     "1080p59.94": "1080p 59.94",
+    "1080p60": "1080p 60",
     "1080p50": "1080p 50",
     "720p59.94": "720p 59.94",
     "720p50": "720p 50",
@@ -51,7 +52,9 @@ def raster_from_geometry(width: int, height: int, fps: float, interlaced: bool) 
             return "1080i50"
         return None
     if width == 1920 and height == 1080 and not interlaced:
-        if _near(fps, 59.94) or _near(fps, 60):
+        if _integer_rate(fps, 60):
+            return "1080p60"
+        if _near(fps, 59.94):
             return "1080p59.94"
         if _near(fps, 50):
             return "1080p50"
@@ -272,6 +275,11 @@ def _miss(detail: str) -> dict:
 
 def _near(value: float, target: float) -> bool:
     return abs(value - target) <= 0.6
+
+
+def _integer_rate(value: float, target: float) -> bool:
+    """True 60 fps, not 59.94. The wide match treats those as the same rate."""
+    return abs(value - target) <= 0.02
 
 
 def _blob(value) -> str:

@@ -9,7 +9,7 @@ from .metrics import InputStatus, OutputStatus, Snapshot
 from .signal import signal_mode
 
 CHANNELS = ("A", "B")
-FORMATS = frozenset({"1080i59.94", "1080i50", "1080p59.94", "1080p50", "720p59.94", "720p50"})
+FORMATS = frozenset({"1080i59.94", "1080i50", "1080p59.94", "1080p60", "1080p50", "720p59.94", "720p50"})
 MODES = frozenset({"srt-caller", "srt-listener", "hls-push", "hls-pull"})
 SOURCES = frozenset({"sdi", "srt"})
 WAITING = frozenset({"slate", "loop", "bars"})
