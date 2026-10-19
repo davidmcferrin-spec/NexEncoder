@@ -183,16 +183,21 @@
     CHANNELS.forEach(applyMode);
   }
 
+  function fieldNodes(id, name) {
+    return document.querySelectorAll("[data-field-" + name + "='" + id + "']");
+  }
+
   function fieldError(id, message) {
-    var node = document.getElementById("error-" + id);
-    if (!node) return;
-    node.hidden = !message;
-    node.textContent = message || "";
+    fieldNodes(id, "error").forEach(function (node) {
+      node.hidden = !message;
+      node.textContent = message || "";
+    });
   }
 
   function setSaved(id, on) {
-    var node = document.getElementById("saved-" + id);
-    if (node) node.hidden = !on;
+    fieldNodes(id, "saved").forEach(function (node) {
+      node.hidden = !on;
+    });
   }
 
   function applyMode(id) {
@@ -374,13 +379,13 @@
     });
   });
 
-  CHANNELS.forEach(function (id) {
-    var restart = document.getElementById("restart-" + id);
-    if (!restart) return;
+  document.querySelectorAll("[data-restart]").forEach(function (restart) {
     restart.addEventListener("click", function () {
+      var id = restart.getAttribute("data-restart");
+      if (CHANNELS.indexOf(id) === -1) return;
       if (!window.confirm("Restart channel " + id + "? The output drops until the pipeline is back.")) return;
-      var status = document.getElementById("restart-note-" + id);
-      if (status) status.textContent = "Restarting…";
+      var notes = document.querySelectorAll("[data-restart-note='" + id + "']");
+      notes.forEach(function (status) { status.textContent = "Restarting…"; });
       fetch("/admin/service.php?unit=" + encodeURIComponent("nexencoder-channel@" + id) + "&action=restart", {
         method: "POST",
         headers: { "X-Requested-With": "NexEncoder" }
@@ -389,10 +394,11 @@
           return { ok: response.ok, body: body };
         });
       }).then(function (result) {
-        if (status) status.textContent = result.ok ? "Channel " + id + " is restarting." : (result.body.detail || "Restart failed");
-        if (!result.ok) fieldError(id, result.body.detail || "Restart failed");
+        var text = result.ok ? "Channel " + id + " is restarting." : ((result.body && result.body.detail) || "Restart failed");
+        notes.forEach(function (status) { status.textContent = text; });
+        if (!result.ok) fieldError(id, (result.body && result.body.detail) || "Restart failed");
       }).catch(function () {
-        if (status) status.textContent = "";
+        notes.forEach(function (status) { status.textContent = ""; });
         fieldError(id, "The console did not answer.");
       });
     });
@@ -439,6 +445,21 @@
       event.preventDefault();
     });
   }
+
+  document.querySelectorAll("[data-open-dialog]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var dialog = document.getElementById(button.getAttribute("data-open-dialog"));
+      if (dialog && typeof dialog.showModal === "function" && !dialog.open) dialog.showModal();
+    });
+  });
+  document.querySelectorAll("dialog.channel-dialog").forEach(function (dialog) {
+    dialog.addEventListener("click", function (event) {
+      if (event.target === dialog) dialog.close();
+    });
+    dialog.querySelectorAll("[data-close-dialog]").forEach(function (button) {
+      button.addEventListener("click", function () { dialog.close(); });
+    });
+  });
 
   paint();
   pollLock();

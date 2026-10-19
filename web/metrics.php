@@ -36,9 +36,6 @@ header('X-Content-Type-Options: nosniff');
     </div>
     <nav class="side-nav" aria-label="Primary">
       <a href="index.php"><span class="nav-ico">▦</span>Dashboard</a>
-      <a href="inputs.php"><span class="nav-ico">▤</span>Inputs</a>
-      <a href="outputs.php"><span class="nav-ico">↗</span>Outputs</a>
-      <a href="monitor.php"><span class="nav-ico">◉</span>Monitor</a>
       <a href="effects.php"><span class="nav-ico">▣</span>Effects</a>
       <a class="is-active" href="metrics.php"><span class="nav-ico">◇</span>Metrics</a>
       <a href="services.php"><span class="nav-ico">⚙</span>Services</a>

@@ -6,12 +6,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "web"
-PAGES = ("index.php", "inputs.php", "outputs.php", "monitor.php", "effects.php", "metrics.php", "services.php")
+PAGES = ("index.php", "effects.php", "metrics.php", "services.php")
 PAGE_SCRIPTS = {
-    "index.php": ["assets/theme.js", "assets/console.js"],
-    "inputs.php": ["assets/theme.js", "assets/console.js"],
-    "outputs.php": ["assets/theme.js", "assets/console.js"],
-    "monitor.php": ["assets/theme.js", "assets/console.js", "assets/preview.js"],
+    "index.php": ["assets/theme.js", "assets/console.js", "assets/preview.js"],
     "effects.php": ["assets/theme.js", "assets/console.js", "assets/effects.js"],
     "metrics.php": ["assets/theme.js", "assets/console.js", "assets/metrics.js"],
     "services.php": ["assets/theme.js", "assets/console.js", "assets/services.js"],
@@ -77,6 +74,9 @@ def test_pages_share_the_nexapp_shell():
         assert parser.scripts == PAGE_SCRIPTS[name]
         assert 'href="metrics.php"' in text and 'href="services.php"' in text
         assert 'href="effects.php"' in text
+        assert 'href="inputs.php"' not in text
+        assert 'href="outputs.php"' not in text
+        assert 'href="monitor.php"' not in text
         for class_name in SHELL:
             assert class_name in parser.classes
         assert parser.active_hrefs == [name]
@@ -133,23 +133,35 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     assert "up to two CG layers" in effects_page
     preview = (WEB / "assets" / "preview.js").read_text(encoding="utf-8")
     assert "/api/" not in preview
-    monitor = (WEB / "monitor.php").read_text(encoding="utf-8")
-    assert 'id="sideband-A"' in monitor and 'id="sideband-B"' in monitor
-    assert 'id="sideband-log"' not in monitor
-    assert 'id="speaker-A"' in monitor and 'id="speaker-B"' in monitor
-    assert 'id="volume-A"' in monitor and 'id="volume-B"' in monitor
-    assert 'id="vu-A"' in monitor and 'id="vu-B"' in monitor
-    assert monitor.index('id="volume-A"') < monitor.index('id="vu-A"')
-    assert monitor.index('id="volume-B"') < monitor.index('id="vu-B"')
+    dashboard = (WEB / "index.php").read_text(encoding="utf-8")
+    assert 'id="sideband-A"' in dashboard and 'id="sideband-B"' in dashboard
+    assert 'id="sideband-log"' not in dashboard
+    assert 'id="speaker-A"' in dashboard and 'id="speaker-B"' in dashboard
+    assert 'id="volume-A"' in dashboard and 'id="volume-B"' in dashboard
+    assert 'id="vu-A"' in dashboard and 'id="vu-B"' in dashboard
+    assert dashboard.index('id="volume-A"') < dashboard.index('id="vu-A"')
+    assert dashboard.index('id="volume-B"') < dashboard.index('id="vu-B"')
+    assert dashboard.index('data-open-dialog="output-dialog-A"') < dashboard.index('id="lock-A"')
+    assert dashboard.index('data-open-dialog="output-dialog-B"') < dashboard.index('id="lock-B"')
+    assert 'id="input-dialog-A"' in dashboard and 'id="output-dialog-B"' in dashboard
+    assert 'id="enable-meters"' in dashboard
+    assert 'id="bars-A"' in dashboard and 'id="bars-B"' in dashboard
     assert 'getElementById("sideband-"' in preview
     assert "track.onended" in preview and "players[id] !== pc" in preview
     assert "createMediaStreamSource" in preview
     assert "nexencoder-audio-muted-" in preview and "nexencoder-audio-volume-" in preview
     assert "video.muted = true" in preview
-    inputs = (WEB / "inputs.php").read_text(encoding="utf-8")
-    assert 'id="lock-A"' in inputs and 'id="lock-B"' in inputs
-    assert 'id="restart-A"' in inputs and 'id="restart-B"' in inputs
-    assert "nexencoder-channel@" in js
+    assert 'getElementById("enable-meters")' in preview and "resumeAudio()" in preview
+    assert "slice(-4)" in preview
+    assert 'id="lock-A"' in dashboard and 'id="lock-B"' in dashboard
+    assert 'id="restart-A"' in dashboard and 'id="restart-B"' in dashboard
+    assert dashboard.count('data-restart="A"') == 2 and dashboard.count('data-restart="B"') == 2
+    for retired in ("inputs.php", "outputs.php", "monitor.php"):
+        text = (WEB / retired).read_text(encoding="utf-8")
+        assert "Location: index.php" in text
+        assert "page-shell" not in text
+    assert "nexencoder-channel@" in js and "showModal" in js
+    assert "data-field-" in js and "data-open-dialog" in js
     assert "/live/decklink.php" in (WEB / "assets" / "console.js").read_text(encoding="utf-8")
     metrics = (WEB / "assets" / "metrics.js").read_text(encoding="utf-8")
     assert "/api/" not in metrics

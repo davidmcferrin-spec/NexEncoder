@@ -1,4 +1,4 @@
-"""Recent caption and splice notes for the monitor page.
+"""Recent caption and splice notes for the dashboard.
 
 The console keeps these in memory. A capture helper posts them; the page polls.
 SCTE totals only increase, so the Prometheus counter does not go backwards.

@@ -79,11 +79,23 @@
     node.master.gain.value = prefMuted(id) ? 0 : prefVolume(id);
   }
 
+  function metersRunning() {
+    return !!(sharedCtx && sharedCtx.state === "running");
+  }
+
+  function paintMeterGate() {
+    var button = document.getElementById("enable-meters");
+    if (!button) return;
+    var Factory = window.AudioContext || window.webkitAudioContext;
+    button.hidden = !Factory || metersRunning();
+  }
+
   function audioContext() {
     if (sharedCtx) return sharedCtx;
     var Factory = window.AudioContext || window.webkitAudioContext;
     if (!Factory) return null;
     sharedCtx = new Factory();
+    sharedCtx.onstatechange = function () { paintMeterGate(); };
     return sharedCtx;
   }
 
@@ -177,7 +189,10 @@
       ["A", "B"].forEach(function (id) {
         if (pendingStreams[id]) buildGraph(id, pendingStreams[id]);
       });
-    }).catch(function () { /* autoplay policy */ });
+      paintMeterGate();
+    }).catch(function () {
+      paintMeterGate();
+    });
   }
 
   function setMuted(id, muted) {
@@ -336,7 +351,7 @@
           log.textContent = "Waiting for caption and splice events from the live path.";
           return;
         }
-        log.textContent = rows.slice(-12).map(function (event) {
+        log.textContent = rows.slice(-4).map(function (event) {
           return event.label + " " + event.text;
         }).join("\n");
       });
@@ -369,8 +384,13 @@
     }
   });
 
+  var enableMeters = document.getElementById("enable-meters");
+  if (enableMeters) {
+    enableMeters.addEventListener("click", function () { resumeAudio(); });
+  }
   document.addEventListener("pointerdown", function () { resumeAudio(); });
   requestAnimationFrame(tickMeters);
+  resumeAudio();
   connect();
   sideband();
   setInterval(function () {

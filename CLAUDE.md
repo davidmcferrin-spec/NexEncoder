@@ -21,11 +21,11 @@ to SCTE-35) and shown on a low-latency WebRTC proxy preview via MediaMTX.
 - Encode/mux: FFmpeg libx264 (6–18 Mbps) and AAC, TSDuck `spliceinject` for SCTE-35, then
   `tsp` SRT or FFmpeg HLS. GStreamer is installed for the host; the live path is ffmpeg | tsp.
 - Control plane: Apache and PHP serve the operator pages on port 80 (no login). `python3 -m nexencoder.console` is the live feed on `127.0.0.1:8788`. PHP calls that feed. Admin saves are PHP scripts. `python3 -m nexencoder.noc` is a separate bearer-token API for NexNOC (`/api/noc/v1`, contract in `docs/NOC-AGENT-API.md`). Caption and splice
-  notes are posted to `/api/sideband` and the monitor page polls them. Config is saved through
-  PHP and applied by restarting `nexencoder-channel@A` / `@B`. The Inputs page can restart that unit. The Services page can copy the visible journal. Its support-bundle bar, separate from the unit list, downloads one redacted zip of every encoder service plus host details such as lsmod and dmesg, for 24, 36, 48, or 72 hours, or the whole journal. The NOC token is not included. Clear log on the selected unit hides older lines in that journal view. Clear All on that bar rotates and vacuums the host journal without downloading a zip. Services keep running. Operator actions are appended to the state directory audit log, that file is included in the support zip, and Clear All does not erase it. Effect recall, normalize,
+  notes are posted to `/api/sideband` and the dashboard polls them. Config is saved through
+  PHP and applied by restarting `nexencoder-channel@A` / `@B`. The dashboard can restart that unit. Input and output settings open from that page. `inputs.php`, `outputs.php`, and `monitor.php` redirect there. The Services page can copy the visible journal. Its support-bundle bar, separate from the unit list, downloads one redacted zip of every encoder service plus host details such as lsmod and dmesg, for 24, 36, 48, or 72 hours, or the whole journal. The NOC token is not included. Clear log on the selected unit hides older lines in that journal view. Clear All on that bar rotates and vacuums the host journal without downloading a zip. Services keep running. Operator actions are appended to the state directory audit log, that file is included in the support zip, and Clear All does not erase it. Effect recall, normalize,
   and bars-with-ident do not restart the channel. Input A is DeckLink Duo (1) or SRT
   listener port 9001; input B is DeckLink Duo (2) or port 9002. Output B listens on 9101.
-  Auto on the Inputs page reads the locked SDI mode from `decklink-status`, or the SRT caller's stream banner, and saves that raster.
+  Auto, in each input's settings, reads the locked SDI mode from `decklink-status`, or the SRT caller's stream banner, and saves that raster.
   Layer −5 is the waiting picture. Layer +5 is bars plus an ident. A tone replaces audio
   while bars are the picture. Preset corners are fractions of the frame.
   Up to two CG layers each take a level from −4 to +4; 0 is the video. HTML is painted live by
@@ -41,7 +41,7 @@ to SCTE-35) and shown on a low-latency WebRTC proxy preview via MediaMTX.
   pinned TSDuck 3.45-4798, and the pinned MediaMTX binary. No pip, no venv. TSDuck is
   downloaded from the official release when `tsp` is not already on PATH.
   Desktop Video and the DeckLink SDK are installed from archives in `/home/nexstar`, not downloaded. Channel units restart forever; a stalled frame count restarts the pipeline.
-- Preview: MediaMTX. A separate ffmpeg decodes the program multicast feed and publishes RTSP to `127.0.0.1:8554`; the monitor page plays WHEP. That picture is the SRT output, including squeeze, graphics, and bars. The page can play the preview audio in the browser, with a mute button, volume slider, and horizontal level meters under each picture. The preview process restarts on its own and does not restart the channel.
+- Preview: MediaMTX. A separate ffmpeg decodes the program multicast feed and publishes RTSP to `127.0.0.1:8554`; the dashboard plays WHEP. That picture is the SRT output, including squeeze, graphics, and bars. The page can play the preview audio in the browser, with a mute button, volume slider, and horizontal level meters under each picture. The preview process restarts on its own and does not restart the channel.
 
 ## Hardware (see README "Target hardware")
 - Host: Dell R440+ or Minisforum MS-01 (low-profile cards only). Card: DeckLink Duo 2 Mini or

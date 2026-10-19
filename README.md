@@ -7,7 +7,7 @@ Blackmagic DeckLink Duo / Duo 2.
 - Outputs per input: SRT (caller or listener) or HLS (push or pull), H.264 6-18 Mbps + AAC stereo
 - Captions: 708 re-embedded as A/53 SEI; 608 carried inside the 708 CDP
 - SCTE: 104 translated to SCTE-35 splice_info_section, muxed on a data PID
-- Monitor: the program picture over WebRTC (MediaMTX), with caption and SCTE sideband. Squeeze, graphics, and bars are in that picture. Each picture has a browser mute button, volume slider, and horizontal level meters. The monitor process can restart without stopping SRT.
+- Dashboard: both program pictures over WebRTC (MediaMTX), with caption and SCTE sideband. Squeeze, graphics, and bars are in that picture. Each picture has a browser mute button, volume slider, and horizontal level meters. Input and Output open that channel's settings. The preview process can restart without stopping SRT.
 
 No Node. No Docker. Runs on the host under systemd (Ubuntu 24.04 LTS).
 
@@ -32,8 +32,8 @@ on `PATH`), a pinned MediaMTX v1.21.1 binary, and Google Chrome when
 `nexencoder-noc.service`. `setup.sh` builds `decklink-configure` and `decklink-status`
 from the SDK headers. Before the channels start, `decklink-configure` sets Duo 2 and
 8K Pro connectors to half-duplex inputs so connectors 1–4 are separate capture pins.
-`decklink-status` prints JSON lock and mode for each connector, and the Inputs page
-and dashboard read that through the live feed. It enables
+`decklink-status` prints JSON lock and mode for each connector, and the dashboard
+reads that through the live feed. It enables
 and restarts Apache, Prometheus, node_exporter, MediaMTX, the console, the NOC agent,
 and `nexencoder-channel@A` and `@B`. A crashed channel, console, or MediaMTX is restarted
 with no start limit. A channel whose frame count stops moving is restarted by its supervisor.
@@ -67,13 +67,16 @@ older journal lines; those lines stay on disk until Clear All. Clear All, on tha
 rotates and vacuums the host journal and does not download a zip. Services keep running. The
 audit log at `/var/lib/nexencoder/state/audit.log` records each action and its settings. There
 is no login, so a line is a time, an action, and the settings. Clear All does not delete that
-file. The Inputs page can restart `nexencoder-channel@A` or `@B` after a save.
+file. The dashboard can restart `nexencoder-channel@A` or `@B` after a save. Input, output,
+and the program picture for each channel are on that page. `inputs.php`, `outputs.php`, and
+`monitor.php` redirect there.
 
-The monitor page plays each program from MediaMTX at `http://<host>:8889/inputA/whep` and
+The dashboard plays each program from MediaMTX at `http://<host>:8889/inputA/whep` and
 `inputB`. That proxy decodes the same local feed SRT sends, so squeeze, graphics, and bars
 match the output. The picture stays muted for autoplay. A speaker button and volume slider
 under each frame play that program's stereo audio in the browser, and horizontal meters
-under the slider show left and right level. Restarting the proxy does not restart the encode. The channel posts
+under the slider show left and right level. The page starts that audio graph when the browser
+allows it, so the meters move while the speakers stay at the saved mute state. Restarting the proxy does not restart the encode. The channel posts
 caption and splice notes to `/api/sideband` as VANC arrives.
 `POST /api/channels/A/scte` translates a SCTE-104 message and sends the SCTE-35 section to
 the channel's spliceinject port. spliceinject listens on `127.0.0.1:19101` (A)
@@ -157,7 +160,7 @@ existing token or `noc.json`.
 | `channels.py` | Saved channel config and the metrics snapshot it produces |
 | `channel.py` | One-channel supervisor: capture, spliceinject, egress |
 | `status.py` | ffmpeg progress file used for live bitrate and signal |
-| `sideband.py` | Caption and splice notes for the monitor page |
+| `sideband.py` | Caption and splice notes for the dashboard |
 | `crc.py` | CRC-32/MPEG-2 |
 
 ## Target hardware
@@ -187,7 +190,7 @@ existing token or `noc.json`.
 - [x] DeckLink connectors: `decklink-configure` sets Duo 2 and 8K Pro pins to half-duplex inputs before the channels start.
 - [x] Phase 2: parsers, translator, TS packetizer, injector with tests (2 TSDuck tests skip without `tstables`)
 - [x] Phase 3: H.264/AAC, tsp SCTE-35 insert, SRT caller/listener, HLS push/pull, channel supervisor
-- [x] Phase 4: MediaMTX preview (RTSP publish, WHEP on the monitor page) and caption/SCTE sideband. The operator console uses the NexApp theme.
+- [x] Phase 4: MediaMTX preview (RTSP publish, WHEP on the dashboard) and caption/SCTE sideband. The operator console uses the NexApp theme.
 - [x] Phase 5: `nexencoder-console`, `nexencoder-channel@`, and `mediamtx` units; `setup.sh` installs ffmpeg, GStreamer, Prometheus, and MediaMTX
 - [x] Phase 6: four-corner squeeze, up to two CG layers (HTML or one SDI fill/key), effect builder, preset recall and normalize
 - [x] Phase 7: SDI or SRT listener per input, waiting picture on layer −5, bars and ident on layer +5, fractional presets, 1080p

@@ -323,6 +323,7 @@ button, .btn {
   background: var(--nx-accent); color: #fff;
   font: inherit; font-weight: 600; font-size: 0.9rem; cursor: pointer; text-decoration: none;
 }
+button[hidden], .btn[hidden] { display: none !important; }
 /* Filled primary buttons: white on the light-theme blue, dark on the dark-theme green.
    These stay at one attribute + one element so later component rules can win. */
 [data-theme="dark"] button, [data-theme="dark"] .btn { color: #04140c; }
