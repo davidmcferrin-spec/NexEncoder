@@ -83,7 +83,12 @@ CG. Neither call restarts the channel. CEA-608/708 stay on the primary frame as 
 and SCTE-104 still arrives as VANC datagrams and leaves as SCTE-35. A CG layer is a live HTML page (WPE, or Chromium capturing PNG with the
 background omitted so transparency survives), an NDI source with alpha when
 GStreamer `ndisrc` is installed, or the shared SDI fill/key pair on
-DeckLink Duo (3) and (4). Each layer takes a level from −4 to +4; 0 is the video.
+DeckLink Duo (3) and (4). Chromium runs under `nice 10` behind the encodes and gets
+30 s to show its first page; it keeps one profile per layer under
+`/var/lib/nexencoder/chrome/<channel>-<slot>`. When a layer stays transparent, run
+`python3 -m nexencoder.cgfeed --probe http://127.0.0.1/cg/bug.html` on the host: it
+starts the same renderer outside the channel and prints Chrome's messages, the time
+to the first painted frame, and how much of that frame is opaque. Each layer takes a level from −4 to +4; 0 is the video.
 A channel holds at most four layers, and two layers cannot share a level.
 
 Input A is DeckLink Duo (1) or an SRT listener on port 9001. Input B is DeckLink Duo (2)

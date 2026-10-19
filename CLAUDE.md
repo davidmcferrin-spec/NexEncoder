@@ -29,7 +29,9 @@ to SCTE-35) and shown on a low-latency WebRTC proxy preview via MediaMTX.
   Layer −5 is the waiting picture. Layer +5 is bars plus an ident. A tone replaces audio
   while bars are the picture. Preset corners are fractions of the frame.
   Up to four CG layers each take a level from −4 to +4; 0 is the video. HTML is painted live by
-  WPE or Chromium with alpha kept. Ubuntu 24.04 does not package WPE, so `setup.sh` installs Google Chrome for that path. An NDI source can occupy a layer when ndisrc is installed.
+  WPE or Chromium with alpha kept. Ubuntu 24.04 does not package WPE, so `setup.sh` installs Google Chrome for that path.
+  Chromium runs under nice 10, gets 30 s to show a page, and keeps one profile per layer in `/var/lib/nexencoder/chrome/<channel>-<slot>`.
+  `python3 -m nexencoder.cgfeed --probe URL` runs that renderer once outside the channel and reports the first frame. An NDI source can occupy a layer when ndisrc is installed.
   One SDI fill/key pair, DeckLink inputs 3 and 4, is shared. `setup.sh` builds
   `decklink-configure` and `nexencoder-decklink-configure` sets the card to
   half-duplex inputs before those units open it, so a factory full-duplex Duo 2

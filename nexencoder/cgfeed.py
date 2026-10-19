@@ -221,9 +221,52 @@ def with_lower_priority(argv: list[str], *, demote: bool) -> list[str]:
     return list(argv)
 
 
-def chromium_argv(browser: str, port: int, url: str, width: int, height: int) -> list[str]:
+CHROME_PROFILES = Path("/var/lib/nexencoder/chrome")
+# Puppeteer gives a browser 30 s to show its first page. This renderer runs
+# under nice 10 behind two encodes, so it gets a sliver of the CPU; the old
+# 8 s budget expired on every start and the layer never came up.
+PAGE_WAIT = 30.0
+_SINGLETON_FILES = ("SingletonLock", "SingletonSocket", "SingletonCookie")
+
+
+def chromium_profile(slot_path: str | Path, root: Path = CHROME_PROFILES) -> Path:
+    """One profile per layer slot, reused across restarts.
+
+    A fresh profile on every start is a cold start every time and leaves a
+    directory behind for each attempt. The slot file is ``<channel>-<slot>``,
+    which is unique on the host and readable in a listing.
+    """
+    return root / Path(slot_path).stem
+
+
+def prepare_profile(profile: Path) -> None:
+    """Make the profile usable after a killed Chrome and drop the old per-port dirs."""
+    try:
+        profile.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        log.warning("cannot create Chrome profile %s: %s", profile, exc)
+        return
+    for name in _SINGLETON_FILES:
+        try:
+            (profile / name).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            log.warning("cannot clear %s in %s: %s", name, profile, exc)
+    try:
+        siblings = list(profile.parent.iterdir())
+    except OSError:
+        return
+    for entry in siblings:
+        if entry.name.isdigit() and entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry, ignore_errors=True)
+
+
+def chromium_argv(browser: str, port: int, url: str, width: int, height: int, profile: str | Path | None = None) -> list[str]:
     # The console service is root. Chrome refuses that sandbox, and each layer
     # needs its own profile or the second page loses the singleton lock.
+    if profile is None:
+        profile = CHROME_PROFILES / str(port)
     return [
         browser, "--headless=new", "--disable-gpu", "--hide-scrollbars",
         "--no-sandbox", "--disable-dev-shm-usage",
@@ -235,7 +278,7 @@ def chromium_argv(browser: str, port: int, url: str, width: int, height: int) ->
         "--disable-features=Translate,MediaRouter,OptimizationHints,PushMessaging",
         "--force-device-scale-factor=1",
         "--default-background-color=00000000",
-        f"--user-data-dir=/var/lib/nexencoder/chrome/{port}",
+        f"--user-data-dir={Path(profile).as_posix()}",
         f"--remote-debugging-port={port}",
         # Without this, current Chrome omits webSocketDebuggerUrl from the page list.
         "--remote-allow-origins=*",
@@ -566,6 +609,22 @@ def _ws_recv(sock: socket.socket) -> str:
     return data.decode("utf-8", "replace")
 
 
+def describe_targets(infos) -> str:
+    """One line of what the browser socket reported, for the journal."""
+    if not isinstance(infos, list):
+        return "no target list"
+    parts = []
+    for info in infos:
+        if not isinstance(info, dict):
+            continue
+        kind = info.get("type") or "?"
+        current = info.get("url") or ""
+        parts.append(f"{kind} {current}".rstrip())
+    if not parts:
+        return "no targets"
+    return "targets: " + "; ".join(parts)
+
+
 def _create_page(call, url: str, deadline: float) -> tuple[str, str]:
     created = call("Target.createTarget", {"url": url}, deadline=deadline)
     target_id = created.get("targetId")
@@ -586,40 +645,68 @@ def _session_for(call, target_id: str, deadline: float) -> str:
     return session_id
 
 
-def _attach_page(call, holder: "_Running", url: str) -> str:
-    """Return the debugging session for the bug page on an open browser socket."""
-    deadline = time.monotonic() + 8
+def _attach_page(call, holder: "_Running", url: str, wait: float = PAGE_WAIT) -> tuple[str, str]:
+    """Return (session id, reason) for the bug page on an open browser socket.
+
+    The browser prints its socket before it has a tab. Rather than wait for
+    that tab, ask for one as soon as the list has none. The reason is empty on
+    success and says what the browser reported when it is not.
+    """
+    deadline = time.monotonic() + wait
+    polls = 0
+    seen = "no answer from the browser"
     target_id = ""
     current = ""
     while time.monotonic() < deadline and not holder.stop.is_set():
-        infos = call("Target.getTargets", deadline=deadline).get("targetInfos")
+        polls += 1
+        try:
+            infos = call("Target.getTargets", deadline=deadline).get("targetInfos")
+        except OSError as exc:
+            seen = f"Target.getTargets failed: {exc}"
+            break
+        seen = describe_targets(infos)
         target_id, current = choose_page_target(infos, url)
         if target_id:
             break
-        if holder.stop.wait(0.2):
-            return ""
+        try:
+            target_id, current = _create_page(call, url, deadline)
+        except OSError as exc:
+            seen = f"{seen}; Target.createTarget failed: {exc}"
+        if target_id:
+            break
+        if holder.stop.wait(0.5):
+            return "", "stopped"
     if holder.stop.is_set():
-        return ""
+        return "", "stopped"
     if not target_id:
-        target_id, current = _create_page(call, url, deadline + 2)
-    if not target_id:
-        return ""
-    session_id = _session_for(call, target_id, deadline + 2)
-    if not session_id:
-        return ""
+        return "", f"after {polls} polls, {seen}"
+    late = time.monotonic() + 5
     try:
-        call("Page.enable", session_id=session_id, deadline=deadline + 2)
-    except OSError:
-        target_id, current = _create_page(call, url, deadline + 2)
-        if not target_id:
-            return ""
-        session_id = _session_for(call, target_id, deadline + 2)
-        if not session_id:
-            return ""
-        call("Page.enable", session_id=session_id, deadline=deadline + 2)
+        session_id = _session_for(call, target_id, late)
+    except OSError as exc:
+        return "", f"Target.attachToTarget failed: {exc}"
+    if not session_id:
+        return "", "Target.attachToTarget gave no session"
+    try:
+        call("Page.enable", session_id=session_id, deadline=late)
+    except OSError as exc:
+        log.info("CG page %s was not usable (%s); opening a new one", target_id, exc)
+        try:
+            target_id, current = _create_page(call, url, late)
+            if not target_id:
+                return "", "Target.createTarget gave no target"
+            session_id = _session_for(call, target_id, late)
+            if not session_id:
+                return "", "Target.attachToTarget gave no session"
+            call("Page.enable", session_id=session_id, deadline=late)
+        except OSError as again:
+            return "", f"second page failed: {again}"
     if current != url:
-        call("Page.navigate", {"url": url}, session_id, deadline=deadline + 2)
-    return session_id
+        try:
+            call("Page.navigate", {"url": url}, session_id, deadline=late)
+        except OSError as exc:
+            return "", f"Page.navigate failed: {exc}"
+    return session_id, ""
 
 
 def run_chromium_feeder(
@@ -628,17 +715,22 @@ def run_chromium_feeder(
     writer: SlotWriter,
     holder: "_Running",
     spawn=subprocess.Popen,
+    profile: Path | None = None,
 ) -> None:
     """Paint one HTML URL with Chromium and write BGRA frames into the slot."""
     port = _free_port()
+    if profile is None:
+        profile = chromium_profile(writer.path)
+    prepare_profile(profile)
     # nice is inherited by Chrome's children, so the whole startup stays
     # behind the DeckLink capture. preexec_fn is unsafe in a threaded process.
     proc = None
     sock = None
+    started = time.monotonic()
     try:
         proc = spawn(
             with_lower_priority(
-                chromium_argv(browser, port, url, writer.width, writer.height),
+                chromium_argv(browser, port, url, writer.width, writer.height, profile),
                 demote=os.name == "posix" and os.path.isfile("/usr/bin/nice"),
             ),
             stdout=subprocess.DEVNULL,
@@ -659,8 +751,10 @@ def run_chromium_feeder(
                 name="nexencoder-cg-log", daemon=True,
             ).start()
         browser_url = ""
-        deadline = time.monotonic() + 8
+        deadline = time.monotonic() + PAGE_WAIT
         while time.monotonic() < deadline and not holder.stop.is_set():
+            if proc.poll() is not None:
+                raise OSError(f"Chromium exited with status {proc.returncode} before opening a devtools socket")
             try:
                 browser_url = sockets.get(timeout=0.2)
             except queue.Empty:
@@ -670,7 +764,7 @@ def run_chromium_feeder(
         if not browser_url:
             if holder.stop.is_set():
                 return
-            raise OSError("Chromium did not open a devtools socket")
+            raise OSError(f"Chromium did not open a devtools socket in {time.monotonic() - started:.0f}s")
         parsed = urlparse(browser_url)
         if not parsed.hostname or not parsed.port:
             raise OSError("Chromium did not open a devtools socket")
@@ -688,7 +782,7 @@ def run_chromium_feeder(
             _ws_send(sock, json.dumps(body))
             while not holder.stop.is_set():
                 if deadline is not None and time.monotonic() > deadline:
-                    return {}
+                    raise OSError(f"{method} was not answered in time")
                 try:
                     message = _ws_recv(sock)
                 except (TimeoutError, socket.timeout):
@@ -707,11 +801,17 @@ def run_chromium_feeder(
                 return result if isinstance(result, dict) else {}
             return {}
 
-        session_id = _attach_page(call, holder, url)
+        session_id, reason = _attach_page(call, holder, url)
         if not session_id:
             if holder.stop.is_set():
                 return
-            raise OSError("Chromium did not open a devtools page")
+            status = proc.poll()
+            alive = "still running" if status is None else f"exited with status {status}"
+            raise OSError(
+                f"Chromium did not open a devtools page in {time.monotonic() - started:.0f}s "
+                f"({reason}; browser {alive})"
+            )
+        log.info("CG page %s is up after %.1fs", url, time.monotonic() - started)
         call("Emulation.setDefaultBackgroundColorOverride", {
             "color": {"r": 0, "g": 0, "b": 0, "a": 0},
         }, session_id)
@@ -871,3 +971,77 @@ def supervise(
     update_key_owner(state_dir, channel_id, False)
     for feeder in running.values():
         feeder.halt()
+
+
+def probe_html(url: str, seconds: float, browser: str | None = None, width: int = 1280, height: int = 720) -> int:
+    """Run the Chromium feeder once, outside the channel, and report what happened.
+
+    ``python3 -m nexencoder.cgfeed --probe http://127.0.0.1/cg/bug.html`` on the
+    encoder host shows Chrome's own messages, the time to the first painted
+    frame, and how much of that frame is opaque. Exit status 0 means a frame
+    arrived; 1 means the page never painted in the time given.
+    """
+    import tempfile
+
+    if browser is None:
+        browser = next(
+            (name for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser") if shutil.which(name)),
+            "",
+        )
+    if not browser:
+        print("no Chromium or Google Chrome on PATH", flush=True)
+        return 2
+    with tempfile.TemporaryDirectory(prefix="nexencoder-probe-") as temp:
+        slot = Path(temp) / "probe-0.nxcg"
+        writer = SlotWriter(slot, width, height)
+        holder = _Running()
+        holder.thread = threading.Thread(
+            target=run_chromium_feeder,
+            args=(browser, url, writer, holder),
+            kwargs={"profile": Path(temp) / "profile"},
+            name="nexencoder-probe",
+            daemon=True,
+        )
+        print(f"starting {browser} on {url} at {width}x{height} for up to {seconds:.0f}s", flush=True)
+        begin = time.monotonic()
+        holder.thread.start()
+        first = None
+        frame = None
+        while time.monotonic() - begin < seconds and holder.thread.is_alive():
+            got = read_slot(slot, width, height)
+            if got is not None:
+                frame = got
+                if first is None:
+                    first = time.monotonic() - begin
+                    print(f"first frame after {first:.1f}s (slot seq {writer.seq})", flush=True)
+            time.sleep(0.25)
+        holder.halt()
+        if frame is None:
+            print("no frame was painted", flush=True)
+            return 1
+        opaque = sum(1 for at in range(3, len(frame), 4) if frame[at])
+        total = width * height
+        print(
+            f"{writer.seq // 2} frames in {time.monotonic() - begin:.1f}s; "
+            f"last frame has {opaque} of {total} pixels with alpha ({100 * opaque / total:.1f}%)",
+            flush=True,
+        )
+        return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="python3 -m nexencoder.cgfeed", description=probe_html.__doc__)
+    parser.add_argument("--probe", metavar="URL", required=True, help="HTML page to paint once with Chromium")
+    parser.add_argument("--seconds", type=float, default=PAGE_WAIT + 15, help="how long to wait for the first frame")
+    parser.add_argument("--browser", default=None, help="browser binary; the default is the first one on PATH")
+    parser.add_argument("--width", type=int, default=1280)
+    parser.add_argument("--height", type=int, default=720)
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    return probe_html(args.probe, args.seconds, args.browser, args.width, args.height)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

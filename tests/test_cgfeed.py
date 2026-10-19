@@ -10,9 +10,13 @@ import zlib
 from nexencoder.cgfeed import (
     SlotWriter,
     _Running,
+    _attach_page,
     _drain,
     chromium_argv,
     chromium_env,
+    chromium_profile,
+    describe_targets,
+    prepare_profile,
     browser_socket_url,
     choose_page_target,
     decode_png_bgra,
@@ -103,6 +107,103 @@ def test_chromium_capture_keeps_a_transparent_background():
     assert "--remote-allow-origins=*" in argv
     assert "--user-data-dir=/var/lib/nexencoder/chrome/9222" in argv
     assert "jpeg" not in " ".join(argv)
+    named = chromium_argv("chromium", 9222, "http://127.0.0.1/cg/bug.html", 1280, 720, "/var/lib/nexencoder/chrome/A-0")
+    assert "--user-data-dir=/var/lib/nexencoder/chrome/A-0" in named
+
+
+def test_chrome_profile_follows_the_slot_and_survives_a_kill(tmp_path):
+    root = tmp_path / "chrome"
+    profile = chromium_profile("/var/lib/nexencoder/state/cg/A-0.nxcg", root)
+    assert profile == root / "A-0"
+    assert chromium_profile("/var/lib/nexencoder/state/cg/B-3.nxcg", root) == root / "B-3"
+    stale = root / "47691"
+    stale.mkdir(parents=True)
+    (stale / "Local State").write_text("{}", encoding="utf-8")
+    keep = root / "B-3"
+    keep.mkdir()
+    (keep / "Local State").write_text("{}", encoding="utf-8")
+    profile.mkdir()
+    (profile / "SingletonLock").write_text("host-1234", encoding="utf-8")
+    (profile / "SingletonCookie").write_text("x", encoding="utf-8")
+    (profile / "Preferences").write_text("{}", encoding="utf-8")
+    prepare_profile(profile)
+    assert not (profile / "SingletonLock").exists()
+    assert not (profile / "SingletonCookie").exists()
+    assert (profile / "Preferences").exists()
+    assert not stale.exists()
+    assert (keep / "Local State").exists()
+
+
+def _browser(script, log=None):
+    """A fake browser socket: ``script`` maps a method to a result dict or an OSError."""
+    calls = log if log is not None else []
+
+    def call(method, params=None, session_id=None, deadline=None):
+        calls.append(method)
+        answer = script[method]
+        if callable(answer):
+            answer = answer(params or {})
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    return call, calls
+
+
+def test_attach_asks_for_a_page_when_the_browser_has_none():
+    url = "http://127.0.0.1/cg/bug.html"
+    call, calls = _browser({
+        "Target.getTargets": {"targetInfos": []},
+        "Target.createTarget": {"targetId": "fresh"},
+        "Target.attachToTarget": {"sessionId": "s1"},
+        "Page.enable": {},
+    })
+    assert _attach_page(call, _Running(), url, wait=2) == ("s1", "")
+    assert calls == ["Target.getTargets", "Target.createTarget", "Target.attachToTarget", "Page.enable"]
+
+
+def test_attach_uses_the_page_chrome_opened_and_navigates_a_blank_one():
+    url = "http://127.0.0.1/cg/bug.html"
+    call, calls = _browser({
+        "Target.getTargets": {"targetInfos": [{"type": "page", "targetId": "blank", "url": "about:blank"}]},
+        "Target.attachToTarget": {"sessionId": "s2"},
+        "Page.enable": {},
+        "Page.navigate": {"frameId": "f"},
+    })
+    assert _attach_page(call, _Running(), url, wait=2) == ("s2", "")
+    assert "Target.createTarget" not in calls
+    assert calls[-1] == "Page.navigate"
+
+
+def test_attach_failure_says_what_the_browser_reported():
+    url = "http://127.0.0.1/cg/bug.html"
+    call, calls = _browser({
+        "Target.getTargets": {"targetInfos": [{"type": "browser", "targetId": "b"}]},
+        "Target.createTarget": OSError("{'code': -32000, 'message': 'Not allowed'}"),
+    })
+    session, reason = _attach_page(call, _Running(), url, wait=0.6)
+    assert session == ""
+    assert "polls" in reason
+    assert "targets: browser" in reason
+    assert "Not allowed" in reason
+    assert calls.count("Target.getTargets") >= 1
+
+    silent, _ = _browser({"Target.getTargets": OSError("Target.getTargets was not answered in time")})
+    session, reason = _attach_page(silent, _Running(), url, wait=0.6)
+    assert session == ""
+    assert "not answered in time" in reason
+
+    halted = _Running()
+    halted.stop.set()
+    assert _attach_page(call, halted, url, wait=0.6) == ("", "stopped")
+
+
+def test_describe_targets_is_one_line():
+    assert describe_targets(None) == "no target list"
+    assert describe_targets([]) == "no targets"
+    assert describe_targets([{"type": "page", "url": "about:blank"}, {"type": "browser"}]) == (
+        "targets: page about:blank; browser"
+    )
 
 
 def test_browser_socket_is_taken_from_the_devtools_line():
