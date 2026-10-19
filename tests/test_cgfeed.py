@@ -13,8 +13,9 @@ from nexencoder.cgfeed import (
     _drain,
     chromium_argv,
     chromium_env,
+    browser_socket_url,
+    choose_page_target,
     decode_png_bgra,
-    devtools_page_url,
     finished_keys,
     reconcile_once,
     with_lower_priority,
@@ -104,18 +105,32 @@ def test_chromium_capture_keeps_a_transparent_background():
     assert "jpeg" not in " ".join(argv)
 
 
-def test_devtools_page_url_ignores_the_browser_socket():
-    browser = {
-        "type": "browser",
-        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/browser/abc",
-    }
-    hidden = {"type": "page", "id": "1"}
-    page = {
-        "type": "page",
-        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/def",
-    }
-    assert devtools_page_url([browser, hidden]) == ""
-    assert devtools_page_url([browser, page]) == page["webSocketDebuggerUrl"]
+def test_browser_socket_is_taken_from_the_devtools_line():
+    line = (
+        "DevTools listening on "
+        "ws://127.0.0.1:43215/devtools/browser/aff349c0-a05b-4202-9b1f-0248be38fdaa"
+    )
+    assert browser_socket_url(line) == (
+        "ws://127.0.0.1:43215/devtools/browser/aff349c0-a05b-4202-9b1f-0248be38fdaa"
+    )
+    assert browser_socket_url("Failed to connect to the bus") == ""
+
+
+def test_page_target_prefers_the_bug_url():
+    url = "http://127.0.0.1/cg/bug.html"
+    infos = [
+        {"type": "browser", "targetId": "browser"},
+        {"type": "tab", "targetId": "tab", "url": url},
+        {"type": "page", "targetId": "blank", "url": "about:blank"},
+        {"type": "page", "targetId": "bug", "url": url},
+    ]
+    assert choose_page_target(infos, url) == ("bug", url)
+    assert choose_page_target([{"type": "tab", "targetId": "tab", "url": url}], url) == ("tab", url)
+    assert choose_page_target([{"type": "page", "targetId": "blank", "url": "about:blank"}], url) == (
+        "blank",
+        "about:blank",
+    )
+    assert choose_page_target([], url) == ("", "")
 
 
 def test_chromium_env_has_no_session_bus():

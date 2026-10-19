@@ -16,10 +16,10 @@ import os
 import shutil
 import socket
 import struct
+import queue
 import subprocess
 import threading
 import time
-import urllib.request
 import zlib
 from pathlib import Path
 from urllib.parse import urlparse
@@ -255,17 +255,47 @@ def chromium_env(base: dict | None = None) -> dict:
     return env
 
 
-def devtools_page_url(pages) -> str:
-    """Websocket of a page target. The browser socket cannot capture a screenshot."""
-    if not isinstance(pages, list):
+def browser_socket_url(line: str) -> str:
+    """The browser websocket Chrome prints once the debugging port is open."""
+    mark = "DevTools listening on "
+    at = line.find(mark)
+    if at < 0:
         return ""
-    for page in pages:
-        if not isinstance(page, dict) or page.get("type") != "page":
-            continue
-        ws = page.get("webSocketDebuggerUrl")
-        if isinstance(ws, str) and ws:
-            return ws
+    url = line[at + len(mark):].strip().split()[0]
+    if url.startswith("ws://") or url.startswith("wss://"):
+        return url
     return ""
+
+
+def choose_page_target(infos, url: str) -> tuple[str, str]:
+    """Pick a page target id and its current URL. A tab is only a fallback.
+
+    ``/json/list`` on current headless Chrome has no page websocket. The
+    browser socket's target list does. Prefer the page already on ``url``.
+    """
+    if not isinstance(infos, list):
+        return "", ""
+    pages: list[tuple[str, str]] = []
+    tabs: list[tuple[str, str]] = []
+    for info in infos:
+        if not isinstance(info, dict):
+            continue
+        target_id = info.get("targetId")
+        if not isinstance(target_id, str) or not target_id:
+            continue
+        current = info.get("url")
+        current = current if isinstance(current, str) else ""
+        if info.get("type") == "page":
+            pages.append((target_id, current))
+        elif info.get("type") == "tab":
+            tabs.append((target_id, current))
+    for group in (pages, tabs):
+        for target_id, current in group:
+            if current == url:
+                return target_id, current
+        if group:
+            return group[0]
+    return "", ""
 
 
 def ndi_argv(name: str, width: int, height: int) -> list[str]:
@@ -402,11 +432,13 @@ _CHROME_QUIET = (
 )
 
 
-def _drain(pipe, label: str) -> None:
+def _drain(pipe, label: str, on_line=None) -> None:
     quiet = label == "chromium"
     try:
         for line in iter(pipe.readline, b""):
             text = line.decode("utf-8", "replace").rstrip()
+            if on_line is not None and text:
+                on_line(text)
             if not text or (quiet and any(mark in text for mark in _CHROME_QUIET)):
                 continue
             log.warning("%s %s", label, text)
@@ -468,6 +500,7 @@ def _ws_handshake(host: str, port: int, path: str) -> socket.socket:
     request = (
         f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\n"
         "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+        f"Origin: http://{host}:{port}\r\n"
         f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
     )
     sock.sendall(request.encode("ascii"))
@@ -533,6 +566,62 @@ def _ws_recv(sock: socket.socket) -> str:
     return data.decode("utf-8", "replace")
 
 
+def _create_page(call, url: str, deadline: float) -> tuple[str, str]:
+    created = call("Target.createTarget", {"url": url}, deadline=deadline)
+    target_id = created.get("targetId")
+    if not isinstance(target_id, str) or not target_id:
+        return "", ""
+    return target_id, url
+
+
+def _session_for(call, target_id: str, deadline: float) -> str:
+    attached = call(
+        "Target.attachToTarget",
+        {"targetId": target_id, "flatten": True},
+        deadline=deadline,
+    )
+    session_id = attached.get("sessionId")
+    if not isinstance(session_id, str):
+        return ""
+    return session_id
+
+
+def _attach_page(call, holder: "_Running", url: str) -> str:
+    """Return the debugging session for the bug page on an open browser socket."""
+    deadline = time.monotonic() + 8
+    target_id = ""
+    current = ""
+    while time.monotonic() < deadline and not holder.stop.is_set():
+        infos = call("Target.getTargets", deadline=deadline).get("targetInfos")
+        target_id, current = choose_page_target(infos, url)
+        if target_id:
+            break
+        if holder.stop.wait(0.2):
+            return ""
+    if holder.stop.is_set():
+        return ""
+    if not target_id:
+        target_id, current = _create_page(call, url, deadline + 2)
+    if not target_id:
+        return ""
+    session_id = _session_for(call, target_id, deadline + 2)
+    if not session_id:
+        return ""
+    try:
+        call("Page.enable", session_id=session_id, deadline=deadline + 2)
+    except OSError:
+        target_id, current = _create_page(call, url, deadline + 2)
+        if not target_id:
+            return ""
+        session_id = _session_for(call, target_id, deadline + 2)
+        if not session_id:
+            return ""
+        call("Page.enable", session_id=session_id, deadline=deadline + 2)
+    if current != url:
+        call("Page.navigate", {"url": url}, session_id, deadline=deadline + 2)
+    return session_id
+
+
 def run_chromium_feeder(
     browser: str,
     url: str,
@@ -557,46 +646,59 @@ def run_chromium_feeder(
             env=chromium_env(),
         )
         holder.proc = proc
+        sockets: queue.Queue[str] = queue.Queue()
+
+        def on_line(text: str) -> None:
+            found = browser_socket_url(text)
+            if found:
+                sockets.put(found)
+
         if proc.stderr is not None:
-            threading.Thread(target=_drain, args=(proc.stderr, "chromium"), name="nexencoder-cg-log", daemon=True).start()
-        target = ""
-        # Host must be localhost. Chrome hides webSocketDebuggerUrl when the
-        # request host is 127.0.0.1, which is why DevTools can be listening
-        # while this loop still finds no page.
-        list_url = f"http://localhost:{port}/json/list"
+            threading.Thread(
+                target=_drain, args=(proc.stderr, "chromium", on_line),
+                name="nexencoder-cg-log", daemon=True,
+            ).start()
+        browser_url = ""
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline and not holder.stop.is_set():
             try:
-                with urllib.request.urlopen(list_url, timeout=1) as response:
-                    pages = json.loads(response.read().decode("utf-8"))
-            except (OSError, json.JSONDecodeError):
-                time.sleep(0.2)
+                browser_url = sockets.get(timeout=0.2)
+            except queue.Empty:
                 continue
-            target = devtools_page_url(pages)
-            if target:
+            if browser_url:
                 break
-        if not target:
+        if not browser_url:
             if holder.stop.is_set():
                 return
-            raise OSError("Chromium did not open a devtools page")
-        parsed = urlparse(target)
-        sock = _ws_handshake(parsed.hostname or "127.0.0.1", parsed.port or port, parsed.path or "/")
+            raise OSError("Chromium did not open a devtools socket")
+        parsed = urlparse(browser_url)
+        if not parsed.hostname or not parsed.port:
+            raise OSError("Chromium did not open a devtools socket")
+        sock = _ws_handshake(parsed.hostname, parsed.port, parsed.path or "/")
         sock.settimeout(5)
         call_id = 0
 
-        def call(method: str, params: dict | None = None) -> dict:
+        def call(method: str, params: dict | None = None, session_id: str | None = None, deadline: float | None = None) -> dict:
             nonlocal call_id
             call_id += 1
             expect = call_id
-            _ws_send(sock, json.dumps({"id": expect, "method": method, "params": params or {}}))
+            body: dict = {"id": expect, "method": method, "params": params or {}}
+            if session_id:
+                body["sessionId"] = session_id
+            _ws_send(sock, json.dumps(body))
             while not holder.stop.is_set():
+                if deadline is not None and time.monotonic() > deadline:
+                    return {}
                 try:
                     message = _ws_recv(sock)
                 except (TimeoutError, socket.timeout):
                     continue
                 if not message:
                     continue
-                payload = json.loads(message)
+                try:
+                    payload = json.loads(message)
+                except json.JSONDecodeError:
+                    continue
                 if payload.get("id") != expect:
                     continue
                 if payload.get("error"):
@@ -605,17 +707,21 @@ def run_chromium_feeder(
                 return result if isinstance(result, dict) else {}
             return {}
 
-        call("Page.enable")
+        session_id = _attach_page(call, holder, url)
+        if not session_id:
+            if holder.stop.is_set():
+                return
+            raise OSError("Chromium did not open a devtools page")
         call("Emulation.setDefaultBackgroundColorOverride", {
             "color": {"r": 0, "g": 0, "b": 0, "a": 0},
-        })
+        }, session_id)
         while not holder.stop.is_set():
             started = time.monotonic()
             result = call("Page.captureScreenshot", {
                 "format": "png",
                 "omitBackground": True,
                 "fromSurface": True,
-            })
+            }, session_id)
             frame = result.get("data")
             if isinstance(frame, str):
                 try:
