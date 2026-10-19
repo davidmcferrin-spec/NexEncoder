@@ -255,6 +255,7 @@ install_ffmpeg() {
     if [[ "$ver" == *"$version"* && "$conf" == *"--enable-decklink"* && "$conf" == *"--enable-nonfree"* \
       && "$conf" == *"--enable-version3"* && "$conf" == *"--enable-libx264"* && "$conf" == *"--enable-libopus"* ]] \
       && [ -e /usr/local/lib/libavdevice.so ] \
+      && "$bin" -hide_banner -decoders 2>/dev/null | grep -q ' png ' \
       && grep -a -q 'nexencoder VANC forwarder' /usr/local/lib/libavdevice.so \
       && grep -a -q 'nexencoder effect stack' /usr/local/lib/libavfilter.so; then
       log "FFmpeg ${version} with DeckLink and the VANC forwarder is already installed (${bin})"
@@ -305,6 +306,7 @@ install_ffmpeg() {
   "$bin" -buildconf | grep -q -- '--enable-decklink'
   "$bin" -buildconf | grep -q -- '--enable-nonfree'
   "$bin" -buildconf | grep -q -- '--enable-version3'
+  "$bin" -hide_banner -decoders | grep -q ' png '
   grep -a -q 'nexencoder VANC forwarder' /usr/local/lib/libavdevice.so
   grep -a -q 'nexencoder effect stack' /usr/local/lib/libavfilter.so
   log "installed ${bin} ($("$bin" -version | head -n 1))"
@@ -393,7 +395,7 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
   media_missing=()
   for pkg in gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad gstreamer1.0-libav curl ca-certificates xz-utils \
-    build-essential pkg-config nasm yasm libx264-dev libssl-dev libopus-dev; do
+    build-essential pkg-config nasm yasm libx264-dev libssl-dev libopus-dev zlib1g-dev; do
     dpkg -s "$pkg" >/dev/null 2>&1 || media_missing+=("$pkg")
   done
   if [ "${#media_missing[@]}" -gt 0 ]; then

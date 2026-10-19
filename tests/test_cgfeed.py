@@ -5,6 +5,7 @@ import json
 import logging
 import struct
 import threading
+import types
 import time
 import zlib
 
@@ -479,3 +480,25 @@ def test_attach_does_not_spend_the_whole_page_wait_on_a_tab_that_never_comes(mon
     assert _attach_page(call, _Running(), "http://127.0.0.1/cg/bug.html", wait=30) == ("s3", "")
     assert time.monotonic() - started < 3
     assert "Target.createTarget" in calls
+
+
+def test_missing_png_decoder_is_noticed_and_remembered(monkeypatch, caplog):
+    import nexencoder.cgfeed as cgfeed
+
+    monkeypatch.setattr(cgfeed, "_PNG_DECODER", None)
+    listing = b" V....D png                  PNG (Portable Network Graphics) image\n"
+    ran = []
+
+    def fake(argv, **kwargs):
+        ran.append(argv)
+        return types.SimpleNamespace(stdout=listing)
+
+    assert cgfeed.ffmpeg_decodes_png(fake) is True
+    assert cgfeed.ffmpeg_decodes_png(fake) is True
+    assert len(ran) == 1
+
+    monkeypatch.setattr(cgfeed, "_PNG_DECODER", None)
+    with caplog.at_level(logging.WARNING):
+        assert cgfeed.ffmpeg_decodes_png(lambda *a, **k: types.SimpleNamespace(stdout=b" V....D mjpeg  Motion JPEG\n")) is False
+    assert "no png decoder" in caplog.text
+    monkeypatch.setattr(cgfeed, "_PNG_DECODER", None)

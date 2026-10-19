@@ -564,6 +564,32 @@ def png_decoder_argv() -> list[str]:
     ]
 
 
+_PNG_DECODER: bool | None = None
+
+
+def ffmpeg_decodes_png(spawn=subprocess.run) -> bool:
+    """True when this ffmpeg has the png decoder.
+
+    The decoder needs zlib at build time. An ffmpeg built without it starts,
+    reads the first screenshot and exits, so the layer never paints.
+    """
+    global _PNG_DECODER
+    if _PNG_DECODER is None:
+        try:
+            out = spawn(
+                ["ffmpeg", "-hide_banner", "-decoders"], capture_output=True, timeout=15, check=False,
+            ).stdout.decode("utf-8", "replace")
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        _PNG_DECODER = any(line.split()[1:2] == ["png"] for line in out.splitlines())
+        if not _PNG_DECODER:
+            log.warning(
+                "ffmpeg has no png decoder (it was built without zlib); HTML layers decode in Python "
+                "and move slowly. Re-run setup.sh with NEXENCODER_FORCE_FFMPEG_BUILD=1 to rebuild it."
+            )
+    return _PNG_DECODER
+
+
 class PngPipe:
     """Persistent PNG-to-BGRA decoder that writes every frame into a slot.
 
@@ -959,12 +985,13 @@ def run_chromium_feeder(
             )
         log.info("CG page %s is up after %.1fs", url, time.monotonic() - started)
         _prepare_page(call, session_id, writer.width, writer.height)
-        decoder = PngPipe(writer, holder.stop)
+        decoder = PngPipe(writer, holder.stop) if ffmpeg_decodes_png() else None
         wrong_size_noted = False
         painted_at = time.monotonic()
         report_at = painted_at + FPS_REPORT_FIRST
         reported = 0
         sent = 0
+        decoded = 0
         while not holder.stop.is_set():
             started = time.monotonic()
             # A renderer that never answers would otherwise hold the layer
@@ -980,9 +1007,16 @@ def run_chromium_feeder(
                 png = base64.b64decode(frame)
                 got_w, got_h = png_size(png)
                 if (got_w, got_h) == (writer.width, writer.height):
-                    if sent - decoder.frames > DECODER_BACKLOG:
-                        raise OSError(f"PNG decoder stopped answering ({decoder.frames} of {sent} frames back)")
-                    decoder.feed(png)
+                    if decoder is None:
+                        try:
+                            writer.write(decode_png_bgra(png))
+                            decoded += 1
+                        except (ValueError, zlib.error) as exc:
+                            log.warning("HTML frame dropped: %s", exc)
+                    else:
+                        if sent - decoder.frames > DECODER_BACKLOG:
+                            raise OSError(f"PNG decoder stopped answering ({decoder.frames} of {sent} frames back)")
+                        decoder.feed(png)
                     sent += 1
                 elif not wrong_size_noted:
                     wrong_size_noted = True
@@ -992,11 +1026,12 @@ def run_chromium_feeder(
                     )
             now = time.monotonic()
             if now >= report_at:
+                done = decoder.frames if decoder is not None else decoded
                 log.info(
                     "HTML layer %s paints %.1f frames/s (%d decoded of %d sent)",
-                    url, (decoder.frames - reported) / max(0.001, now - painted_at), decoder.frames, sent,
+                    url, (done - reported) / max(0.001, now - painted_at), done, sent,
                 )
-                reported = decoder.frames
+                reported = done
                 painted_at = now
                 report_at = now + FPS_REPORT_EVERY
             remain = max(0.0, (1 / CAPTURE_FPS) - (now - started))
