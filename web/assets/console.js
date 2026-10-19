@@ -19,14 +19,24 @@
     B: { sdi: "DeckLink Duo (2)", srt: "SRT listener · port 9002" }
   };
   var MODES = ["srt-caller", "srt-listener", "hls-push", "hls-pull"];
+  var MODE_LABELS = {
+    "srt-caller": "SRT caller",
+    "srt-listener": "SRT listener",
+    "hls-push": "HLS push",
+    "hls-pull": "HLS pull"
+  };
+  var SLOTS = ["1", "2", "3", "4"];
+  var MAX_OUTPUTS = 4;
+  var RESERVED_PORTS = { 9001: true, 9002: true };
+  var DEFAULT_PORTS = { A: 9000, B: 9101 };
   var DEFAULTS = {
     inputs: {
-      A: { format: "1080i59.94", device: "DeckLink Duo (1)", source: "sdi", waiting: "slate", loop: "" },
-      B: { format: "1080i59.94", device: "DeckLink Duo (2)", source: "sdi", waiting: "slate", loop: "" }
+      A: { format: "1080i59.94", device: "DeckLink Duo (1)", source: "sdi", waiting: "slate", loop: "", bitrate: 8 },
+      B: { format: "1080i59.94", device: "DeckLink Duo (2)", source: "sdi", waiting: "slate", loop: "", bitrate: 8 }
     },
     outputs: {
-      A: { mode: "srt-listener", bitrate: 8, host: "", port: 9000, url: "" },
-      B: { mode: "srt-listener", bitrate: 8, host: "", port: 9101, url: "" }
+      A: [{ id: "1", mode: "srt-listener", host: "", port: 9000, url: "" }],
+      B: [{ id: "1", mode: "srt-listener", host: "", port: 9101, url: "" }]
     }
   };
   var dirty = false;
@@ -34,6 +44,70 @@
 
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
+  }
+
+  function asDestinations(raw) {
+    if (Array.isArray(raw)) return raw.filter(function (item) { return item && typeof item === "object"; }).slice(0, MAX_OUTPUTS);
+    if (raw && typeof raw === "object") return [raw];
+    return [];
+  }
+
+  function legalBitrate(value) {
+    var bitrate = Number(value);
+    return Number.isInteger(bitrate) && bitrate >= 6 && bitrate <= 18 ? bitrate : null;
+  }
+
+  function cleanDestination(raw, fallbackPort) {
+    var dest = { id: "", mode: "srt-listener", host: "", port: fallbackPort, url: "" };
+    var slot = raw && raw.id != null ? String(raw.id) : "";
+    if (SLOTS.indexOf(slot) !== -1) dest.id = slot;
+    if (raw && MODES.indexOf(raw.mode) !== -1) dest.mode = raw.mode;
+    if (raw && typeof raw.host === "string") dest.host = raw.host.slice(0, 253);
+    var port = Number(raw && raw.port);
+    if (Number.isInteger(port) && port >= 1 && port <= 65535) dest.port = port;
+    if (dest.mode === "srt-listener" && dest.port === 9001) dest.port = 9101;
+    if (dest.mode === "srt-listener" && dest.port === 9002) dest.port = 9102;
+    if (raw && typeof raw.url === "string") dest.url = raw.url.slice(0, 500);
+    return dest;
+  }
+
+  function assignSlots(items) {
+    var seen = {};
+    items.forEach(function (item) {
+      if (SLOTS.indexOf(item.id) === -1 || seen[item.id]) item.id = "";
+      else seen[item.id] = true;
+    });
+    var free = SLOTS.filter(function (slot) { return !seen[slot]; });
+    items.forEach(function (item) {
+      if (!item.id) item.id = free.shift();
+    });
+  }
+
+  function listenerPorts(skipKey) {
+    var used = { 9001: true, 9002: true };
+    CHANNELS.forEach(function (id) {
+      (config.outputs[id] || []).forEach(function (output) {
+        if (output.mode !== "srt-listener") return;
+        if (skipKey && skipKey === id + ":" + output.id) return;
+        used[output.port] = true;
+      });
+    });
+    return used;
+  }
+
+  function nextListenerPort(skipKey) {
+    var used = listenerPorts(skipKey);
+    var port = 9200;
+    while (used[port] && port < 65535) port += 1;
+    return port;
+  }
+
+  function claimListenerPort(port, skipKey) {
+    var used = listenerPorts(skipKey);
+    if (port === 9001) port = 9101;
+    if (port === 9002) port = 9102;
+    if (used[port] || RESERVED_PORTS[port]) return nextListenerPort(skipKey);
+    return port;
   }
 
   function normalize(saved) {
@@ -47,25 +121,31 @@
       if (input && SOURCES.indexOf(input.source) !== -1) config.inputs[id].source = input.source;
       if (input && WAITING.indexOf(input.waiting) !== -1) config.inputs[id].waiting = input.waiting;
       if (input && typeof input.loop === "string") config.inputs[id].loop = input.loop.slice(0, 500);
-      var output = saved.outputs && saved.outputs[id];
-      if (!output) return;
-      if (MODES.indexOf(output.mode) !== -1) config.outputs[id].mode = output.mode;
-      var bitrate = Number(output.bitrate);
-      if (Number.isInteger(bitrate) && bitrate >= 6 && bitrate <= 18) {
-        config.outputs[id].bitrate = bitrate;
+      var items = asDestinations(saved.outputs && saved.outputs[id]);
+      var bitrate = legalBitrate(input && input.bitrate);
+      if (bitrate === null) {
+        items.some(function (item) {
+          bitrate = legalBitrate(item.bitrate);
+          return bitrate !== null;
+        });
       }
-      if (typeof output.host === "string") config.outputs[id].host = output.host.slice(0, 253);
-      var port = Number(output.port);
-      if (Number.isInteger(port) && port >= 1 && port <= 65535) {
-        config.outputs[id].port = port;
-      }
-      if (config.outputs[id].mode === "srt-listener" && config.outputs[id].port === 9001) {
-        config.outputs[id].port = 9101;
-      }
-      if (config.outputs[id].mode === "srt-listener" && config.outputs[id].port === 9002) {
-        config.outputs[id].port = 9102;
-      }
-      if (typeof output.url === "string") config.outputs[id].url = output.url.slice(0, 500);
+      if (bitrate !== null) config.inputs[id].bitrate = bitrate;
+      if (!items.length) return;
+      var cleaned = items.map(function (item) { return cleanDestination(item, DEFAULT_PORTS[id]); });
+      assignSlots(cleaned);
+      config.outputs[id] = cleaned;
+    });
+    var used = { 9001: true, 9002: true };
+    CHANNELS.forEach(function (id) {
+      config.outputs[id].forEach(function (output) {
+        if (output.mode !== "srt-listener") return;
+        if (used[output.port]) {
+          var port = 9200;
+          while (used[port] && port < 65535) port += 1;
+          output.port = port;
+        }
+        used[output.port] = true;
+      });
     });
     return config;
   }
@@ -97,14 +177,18 @@
       }
       return response.json();
     }).then(function (body) {
-      if (body && body.config) localStorage.setItem(STORAGE_KEY, JSON.stringify(body.config));
+      if (body && body.config) {
+        config = normalize(body.config);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+        paint();
+      }
     }).catch(function (err) {
       fieldError(id, err.message || "The encoder did not save this.");
       setSaved(id, false);
     });
   }
 
-  function outputSummary(output) {
+  function summarizeOne(output) {
     if (output.mode === "srt-caller") {
       var target = output.host ? output.host + ":" + output.port : "address not set";
       return "SRT caller · " + target;
@@ -114,6 +198,10 @@
       return output.url ? "HLS push · " + output.url : "HLS push · URL not set";
     }
     return output.url ? "HLS pull · " + output.url : "HLS pull · local playlist";
+  }
+
+  function outputSummary(outputs) {
+    return (outputs || []).map(summarizeOne).join(" · ");
   }
 
   function setThemeLabel() {
@@ -148,7 +236,7 @@
       var bitrate = node.querySelector("[data-field='bitrate']");
       if (format) format.textContent = FORMATS[input.format] || input.format;
       if (delivery) delivery.textContent = outputSummary(output);
-      if (bitrate) bitrate.textContent = String(output.bitrate) + " Mbps";
+      if (bitrate) bitrate.textContent = String(input.bitrate) + " Mbps";
     });
     document.querySelectorAll("[data-key='format']").forEach(function (select) {
       var id = select.getAttribute("data-channel");
@@ -166,6 +254,10 @@
       var id = input.getAttribute("data-channel");
       if (config.inputs[id]) input.value = config.inputs[id].loop;
     });
+    document.querySelectorAll("[data-key='bitrate']").forEach(function (input) {
+      var id = input.getAttribute("data-channel");
+      if (config.inputs[id]) input.value = String(config.inputs[id].bitrate);
+    });
     CHANNELS.forEach(function (id) {
       var endpoint = document.getElementById("endpoint-" + id);
       var input = config.inputs[id];
@@ -175,12 +267,7 @@
       var button = document.getElementById("bars-" + id);
       if (button) button.textContent = bars[id] ? "Bars with ident: on" : "Bars with ident: off";
     });
-    document.querySelectorAll("[data-output-field]").forEach(function (input) {
-      var id = input.getAttribute("data-channel");
-      var key = input.getAttribute("data-key");
-      if (config.outputs[id]) input.value = config.outputs[id][key];
-    });
-    CHANNELS.forEach(applyMode);
+    renderOutputs();
   }
 
   function fieldNodes(id, name) {
@@ -200,20 +287,126 @@
     });
   }
 
-  function applyMode(id) {
-    var mode = config.outputs[id].mode;
-    document.querySelectorAll("[data-channel-fields='" + id + "']").forEach(function (block) {
-      var modes = (block.getAttribute("data-modes") || "").split(/\s+/);
-      block.hidden = modes.indexOf(mode) === -1;
-    });
-    var urlLabel = document.querySelector("[data-url-label='" + id + "']");
-    if (urlLabel) urlLabel.textContent = mode === "hls-push" ? "Push URL" : "Playlist URL";
-    var urlInput = document.getElementById("url-" + id);
-    if (urlInput) {
-      urlInput.placeholder = mode === "hls-push"
-        ? "https://origin.example/live/" + id.toLowerCase() + "/index.m3u8"
-        : "http://this-host/live/" + id.toLowerCase() + "/index.m3u8";
+  function findOutput(channelId, slot) {
+    var list = config.outputs[channelId] || [];
+    for (var i = 0; i < list.length; i += 1) {
+      if (list[i].id === slot) return list[i];
     }
+    return null;
+  }
+
+  function el(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text != null) node.textContent = text;
+    return node;
+  }
+
+  function labeledField(labelText, control) {
+    var block = el("div", "field-block");
+    var label = el("label", "", labelText);
+    label.htmlFor = control.id;
+    block.appendChild(label);
+    block.appendChild(control);
+    return block;
+  }
+
+  function outputCard(channelId, output) {
+    var card = el("div", "output-card");
+    card.setAttribute("data-output-card", channelId + ":" + output.id);
+    var head = el("div", "output-card-head");
+    head.appendChild(el("strong", "", "Output " + output.id));
+    if (config.outputs[channelId].length > 1) {
+      var remove = el("button", "btn-text", "Remove");
+      remove.type = "button";
+      remove.setAttribute("data-remove-output", channelId);
+      remove.setAttribute("data-output-id", output.id);
+      head.appendChild(remove);
+    }
+    card.appendChild(head);
+
+    var mode = el("select");
+    mode.id = "mode-" + channelId + "-" + output.id;
+    mode.setAttribute("data-output-field", "");
+    mode.setAttribute("data-channel", channelId);
+    mode.setAttribute("data-output-id", output.id);
+    mode.setAttribute("data-key", "mode");
+    MODES.forEach(function (value) {
+      var option = el("option", "", MODE_LABELS[value]);
+      option.value = value;
+      mode.appendChild(option);
+    });
+    mode.value = output.mode;
+    card.appendChild(labeledField("Delivery", mode));
+
+    if (output.mode === "srt-caller") {
+      var host = el("input");
+      host.id = "host-" + channelId + "-" + output.id;
+      host.type = "text";
+      host.autocomplete = "off";
+      host.spellcheck = false;
+      host.placeholder = "srt.example.com";
+      host.value = output.host;
+      host.setAttribute("data-output-field", "");
+      host.setAttribute("data-channel", channelId);
+      host.setAttribute("data-output-id", output.id);
+      host.setAttribute("data-key", "host");
+      card.appendChild(labeledField("Listener address", host));
+    }
+    if (output.mode === "srt-caller" || output.mode === "srt-listener") {
+      var port = el("input");
+      port.id = "port-" + channelId + "-" + output.id;
+      port.type = "number";
+      port.min = "1";
+      port.max = "65535";
+      port.step = "1";
+      port.inputMode = "numeric";
+      port.value = String(output.port);
+      port.setAttribute("data-output-field", "");
+      port.setAttribute("data-channel", channelId);
+      port.setAttribute("data-output-id", output.id);
+      port.setAttribute("data-key", "port");
+      card.appendChild(labeledField("Port", port));
+    }
+    if (output.mode === "hls-push" || output.mode === "hls-pull") {
+      var url = el("input");
+      url.id = "url-" + channelId + "-" + output.id;
+      url.type = "url";
+      url.autocomplete = "off";
+      url.spellcheck = false;
+      url.placeholder = output.mode === "hls-push"
+        ? "https://origin.example/live/" + channelId.toLowerCase() + "/index.m3u8"
+        : "http://this-host/live/" + channelId.toLowerCase() + "/" + output.id + "/index.m3u8";
+      url.value = output.url;
+      url.setAttribute("data-output-field", "");
+      url.setAttribute("data-channel", channelId);
+      url.setAttribute("data-output-id", output.id);
+      url.setAttribute("data-key", "url");
+      card.appendChild(labeledField(output.mode === "hls-push" ? "Push URL" : "Playlist URL", url));
+    }
+    return card;
+  }
+
+  function renderOutputs() {
+    CHANNELS.forEach(function (id) {
+      var list = document.querySelector("[data-output-list='" + id + "']");
+      if (!list) return;
+      list.textContent = "";
+      (config.outputs[id] || []).forEach(function (output) {
+        list.appendChild(outputCard(id, output));
+      });
+      var add = document.querySelector("[data-add-output='" + id + "']");
+      if (add) add.hidden = (config.outputs[id] || []).length >= MAX_OUTPUTS;
+    });
+  }
+
+  function nextSlot(channelId) {
+    var used = {};
+    (config.outputs[channelId] || []).forEach(function (output) { used[output.id] = true; });
+    for (var i = 0; i < SLOTS.length; i += 1) {
+      if (!used[SLOTS[i]]) return SLOTS[i];
+    }
+    return "";
   }
 
   function validUrl(value) {
@@ -241,24 +434,20 @@
 
   function readOutputField(input) {
     var id = input.getAttribute("data-channel");
+    var slot = input.getAttribute("data-output-id");
     var key = input.getAttribute("data-key");
-    var output = config.outputs[id];
+    var output = findOutput(id, slot);
+    if (!output) return;
     if (key === "mode") {
       if (MODES.indexOf(input.value) === -1) return;
       output.mode = input.value;
+      if (output.mode === "srt-listener") {
+        output.port = claimListenerPort(output.port, id + ":" + output.id);
+      }
       persist(id);
       return;
     }
-    if (key === "bitrate") {
-      var bitrate = Number(input.value);
-      if (!Number.isInteger(bitrate) || bitrate < 6 || bitrate > 18) {
-        fieldError(id, "Video bitrate stays between 6 and 18 Mbps.");
-        setSaved(id, false);
-        input.value = String(output.bitrate);
-        return;
-      }
-      output.bitrate = bitrate;
-    } else if (key === "port") {
+    if (key === "port") {
       var port = Number(input.value);
       if (!Number.isInteger(port) || port < 1 || port > 65535) {
         fieldError(id, "Port stays between 1 and 65535.");
@@ -266,7 +455,9 @@
         input.value = String(output.port);
         return;
       }
+      if (output.mode === "srt-listener") port = claimListenerPort(port, id + ":" + output.id);
       output.port = port;
+      input.value = String(port);
     } else if (key === "host") {
       var host = input.value.trim();
       if (host.length > 253 || /\s/.test(host)) {
@@ -315,6 +506,21 @@
       var id = select.getAttribute("data-channel");
       if (WAITING.indexOf(select.value) === -1) return;
       config.inputs[id].waiting = select.value;
+      persist(id);
+    });
+  });
+
+  document.querySelectorAll("[data-key='bitrate']").forEach(function (input) {
+    input.addEventListener("change", function () {
+      var id = input.getAttribute("data-channel");
+      var bitrate = legalBitrate(input.value);
+      if (bitrate === null) {
+        fieldError(id, "Video bitrate stays between 6 and 18 Mbps.");
+        setSaved(id, false);
+        input.value = String(config.inputs[id].bitrate);
+        return;
+      }
+      config.inputs[id].bitrate = bitrate;
       persist(id);
     });
   });
@@ -433,9 +639,39 @@
     });
   });
 
-  document.querySelectorAll("[data-output-field]").forEach(function (input) {
-    input.addEventListener("change", function () {
+  document.querySelectorAll("[data-output-list]").forEach(function (list) {
+    list.addEventListener("change", function (event) {
+      var input = event.target;
+      if (!input || !input.hasAttribute("data-output-field")) return;
       readOutputField(input);
+    });
+    list.addEventListener("click", function (event) {
+      var button = event.target.closest("[data-remove-output]");
+      if (!button || !list.contains(button)) return;
+      var id = button.getAttribute("data-remove-output");
+      var slot = button.getAttribute("data-output-id");
+      var outputs = config.outputs[id] || [];
+      if (outputs.length <= 1) return;
+      config.outputs[id] = outputs.filter(function (output) { return output.id !== slot; });
+      persist(id);
+    });
+  });
+
+  document.querySelectorAll("[data-add-output]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var id = button.getAttribute("data-add-output");
+      var outputs = config.outputs[id];
+      if (!outputs || outputs.length >= MAX_OUTPUTS) return;
+      var slot = nextSlot(id);
+      if (!slot) return;
+      outputs.push({
+        id: slot,
+        mode: "srt-listener",
+        host: "",
+        port: nextListenerPort(),
+        url: ""
+      });
+      persist(id);
     });
   });
 

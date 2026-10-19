@@ -370,7 +370,7 @@ install_noc_agent() {
   fi
   log "NOC agent is nexencoder-noc on port 8790. Token file is /etc/nexencoder/noc.token (mode 640, group nexencoder)."
   log "Set encoder_id, site, location, and allow in /etc/nexencoder/noc.json, then restart nexencoder-noc."
-  log "Rotate the token by replacing /etc/nexencoder/noc.token and restarting nexencoder-noc. Do not print the token."
+  log "Create, revoke, and delete tokens on the Services page. The agent re-reads the token file, so that does not need a restart."
 }
 
 if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt-get >/dev/null 2>&1; then

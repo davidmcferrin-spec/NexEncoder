@@ -20,6 +20,7 @@ from nexencoder.channel import (
     pop_jpegs,
     progress_target,
     run_channel,
+    watch_egress,
     run_preview,
     write_jpeg_atomic,
 )
@@ -229,6 +230,70 @@ def test_run_channel_starts_capture_splice_and_egress(tmp_path):
     assert pipes[0].closed is True
     assert "--listener" in calls[1][0]
     assert str(tmp_path / "state" / "A.progress") in calls[0][0]
+
+
+def test_run_channel_starts_one_egress_per_destination(tmp_path):
+    save_config(tmp_path / "config.json", {
+        "outputs": {"A": [
+            {"mode": "srt-listener", "port": 9000},
+            {"mode": "hls-pull", "url": ""},
+        ]},
+    })
+    calls = []
+
+    def spawn(argv, **kwargs):
+        proc = _Proc()
+        if kwargs.get("stdout") is subprocess.PIPE:
+            proc.stdout = type("Pipe", (), {"close": lambda self: None})()
+        calls.append(argv)
+        return proc
+
+    code = run_channel(
+        "A", tmp_path / "config.json", tmp_path / "hls", tmp_path / "state",
+        spawn=spawn, cycles=1, install_signals=False, srt_statistics=False,
+    )
+    assert code == 0
+    assert [argv[0] for argv in calls] == ["ffmpeg", "tsp", "ffmpeg", "tsp"]
+    assert "--listener" in calls[1]
+    joined = " ".join(calls[2])
+    assert "hls" in joined and str(tmp_path / "hls" / "A" / "2") in joined
+    assert "spliceinject" in calls[3]
+
+
+def test_watch_egress_restarts_only_while_the_encode_is_up():
+    launched = []
+    stop = threading.Event()
+    hold = threading.Event()
+    hold.set()
+
+    def relaunch():
+        proc = _Alive()
+        launched.append(proc)
+        stop.set()
+        return proc
+
+    thread = threading.Thread(
+        target=watch_egress,
+        kwargs={
+            "proc": _Proc(),
+            "relaunch": relaunch,
+            "stop": stop,
+            "hold": hold,
+            "pause": lambda _seconds: None,
+            "label": "output 2",
+            "backoff_start": 0,
+            "backoff_cap": 0,
+        },
+        daemon=True,
+    )
+    thread.start()
+    thread.join(0.15)
+    assert thread.is_alive()
+    assert launched == []
+    hold.clear()
+    thread.join(2)
+    assert len(launched) == 1 and launched[0].terminated
+    assert not thread.is_alive()
 
 
 def test_run_channel_refuses_a_caller_with_no_address(tmp_path):

@@ -102,6 +102,14 @@ header('X-Content-Type-Options: nosniff');
       </section>
     </div>
   </main>
+  <button type="button" class="api-help-button" id="api-help" aria-label="API help">?</button>
+  <dialog class="channel-dialog api-help-dialog" id="api-help-dialog">
+    <div class="channel-dialog-head">
+      <h2>Effect API</h2>
+      <button type="button" class="secondary" data-close-dialog>Close</button>
+    </div>
+    <div id="api-help-body"></div>
+  </dialog>
   <footer class="shell-footer">
     <span>NexEncoder</span>
     <span class="footer-version">v0.1.0</span>

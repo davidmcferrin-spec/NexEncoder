@@ -39,6 +39,7 @@ class OutputStatus:
     dropped_frames: int = 0
     rtt_seconds: float | None = None
     packets_lost: int | None = None
+    slot: str = "1"
 
 
 @dataclass(frozen=True)
@@ -202,8 +203,8 @@ def render_metrics(snapshot: Snapshot | None = None) -> str:
         out.sample("nexencoder_input_scte104_messages_total", item.scte104_messages, labels)
 
     out.header("nexencoder_output_up", "gauge", "1 when the encode pipeline is running.")
-    out.header("nexencoder_output_connected", "gauge", "1 when the SRT peer or HLS target is connected.")
-    out.header("nexencoder_output_info", "gauge", "Delivery mode. Value is always 1.")
+    out.header("nexencoder_output_connected", "gauge", "1 when this destination's SRT peer or HLS target is connected.")
+    out.header("nexencoder_output_info", "gauge", "Delivery mode for one destination. Value is always 1.")
     out.header("nexencoder_output_video_bitrate_bps", "gauge", "Measured video bitrate in bits per second.")
     out.header("nexencoder_output_video_bitrate_target_bps", "gauge", "Configured video bitrate in bits per second.")
     out.header("nexencoder_output_width", "gauge", "Encoded width in pixels.")
@@ -211,22 +212,27 @@ def render_metrics(snapshot: Snapshot | None = None) -> str:
     out.header("nexencoder_output_dropped_frames_total", "counter", "Frames dropped by the encode pipeline.")
     out.header("nexencoder_output_rtt_seconds", "gauge", "SRT round-trip time in seconds.")
     out.header("nexencoder_output_packets_lost_total", "counter", "SRT packets lost.")
+    seen_encode: set[str] = set()
     for item in snap.outputs:
-        labels = {"output": item.output_id}
-        out.sample("nexencoder_output_up", 1 if item.up else 0, labels)
-        out.sample("nexencoder_output_connected", 1 if item.connected else 0, labels)
+        encode = {"output": item.output_id}
+        dest = {"output": item.output_id, "destination": item.slot}
+        if item.output_id not in seen_encode:
+            seen_encode.add(item.output_id)
+            out.sample("nexencoder_output_up", 1 if item.up else 0, encode)
+            out.optional("nexencoder_output_video_bitrate_bps", item.video_bitrate_bps, encode)
+            out.optional("nexencoder_output_video_bitrate_target_bps", item.video_bitrate_target_bps, encode)
+            out.optional("nexencoder_output_width", item.width, encode)
+            out.optional("nexencoder_output_height", item.height, encode)
+            out.sample("nexencoder_output_dropped_frames_total", item.dropped_frames, encode)
+        out.sample("nexencoder_output_connected", 1 if item.connected else 0, dest)
         out.sample("nexencoder_output_info", 1, {
             "output": item.output_id,
+            "destination": item.slot,
             "mode": item.mode,
             **_raster_labels(item.width, item.height, None),
         })
-        out.optional("nexencoder_output_video_bitrate_bps", item.video_bitrate_bps, labels)
-        out.optional("nexencoder_output_video_bitrate_target_bps", item.video_bitrate_target_bps, labels)
-        out.optional("nexencoder_output_width", item.width, labels)
-        out.optional("nexencoder_output_height", item.height, labels)
-        out.sample("nexencoder_output_dropped_frames_total", item.dropped_frames, labels)
-        out.optional("nexencoder_output_rtt_seconds", item.rtt_seconds, labels)
-        out.optional("nexencoder_output_packets_lost_total", item.packets_lost, labels)
+        out.optional("nexencoder_output_rtt_seconds", item.rtt_seconds, dest)
+        out.optional("nexencoder_output_packets_lost_total", item.packets_lost, dest)
 
     out.lines.append("")
     return "\n".join(out.lines)

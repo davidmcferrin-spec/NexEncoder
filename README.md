@@ -4,7 +4,7 @@ Two-input HD-SDI to SRT/HLS encoder for a Dell R4xx server (R440 realistic minim
 Blackmagic DeckLink Duo / Duo 2.
 
 - Inputs: 2 channels, each SDI or an SRT listener (1080i / 1080p / 720p). SDI carries CEA-608/708 and SCTE-104
-- Outputs per input: SRT (caller or listener) or HLS (push or pull), H.264 6-18 Mbps + AAC stereo
+- Outputs per input: up to four of SRT (caller or listener) or HLS (push or pull), sharing one H.264 6-18 Mbps + AAC stereo encode
 - Captions: 708 re-embedded as A/53 SEI; 608 carried inside the 708 CDP
 - SCTE: 104 translated to SCTE-35 splice_info_section, muxed on a data PID
 - Dashboard: both program pictures over WebRTC (MediaMTX), with caption and SCTE sideband. Squeeze, graphics, and bars are in that picture. Each picture has a browser mute button, volume slider, and horizontal level meters. Input and Output open that channel's settings. The preview process can restart without stopping SRT.
@@ -118,9 +118,9 @@ NexNOC polls a separate process, `python3 -m nexencoder.noc`. It is not the oper
 console. The pages are Apache on port 80, with no login. The live feed stays on
 `127.0.0.1:8788`. The agent listens on
 `0.0.0.0:8790` (override in `/etc/nexencoder/noc.json`) and requires a bearer token
-from `/etc/nexencoder/noc.token`. The same token recalls or clears a stored effect
-and reports whether that effect is on an output. Start, stop, and restart of the
-two channel units are on that agent as well. The contract, example payloads, TLS, and the
+from `/etc/nexencoder/noc.token`. Services creates, revokes, and deletes those
+tokens. Effect recall and the on-air check use a lowercase slug in the URL.
+Start, stop, and restart of the two channel units are on that agent as well. The contract, example payloads, TLS, and the
 install and token-rotation steps are in [docs/NOC-AGENT-API.md](docs/NOC-AGENT-API.md).
 
 `setup.sh` creates the `nexencoder` system user, the token file (mode 640), a polkit
@@ -191,7 +191,7 @@ existing token or `noc.json`.
 - [x] Phase 1: DeckLink capture argv (`yuv422p10`, one process per input, format codes) and VANC scan. Live card proof is still open.
 - [x] DeckLink connectors: `decklink-configure` sets Duo 2 and 8K Pro pins to half-duplex inputs before the channels start.
 - [x] Phase 2: parsers, translator, TS packetizer, injector with tests (2 TSDuck tests skip without `tstables`)
-- [x] Phase 3: H.264/AAC, tsp SCTE-35 insert, SRT caller/listener, HLS push/pull, channel supervisor
+- [x] Phase 3: H.264/AAC, tsp SCTE-35 insert, SRT caller/listener, HLS push/pull, channel supervisor. Each input can publish up to four of those deliveries from the one encode.
 - [x] Phase 4: MediaMTX preview (RTSP publish, WHEP on the dashboard) and caption/SCTE sideband. The operator console uses the NexApp theme.
 - [x] Phase 5: `nexencoder-console`, `nexencoder-channel@`, and `mediamtx` units; `setup.sh` installs ffmpeg, GStreamer, Prometheus, and MediaMTX
 - [x] Phase 6: four-corner squeeze, up to two CG layers (HTML or one SDI fill/key), effect builder, preset recall and normalize

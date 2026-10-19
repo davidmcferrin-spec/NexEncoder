@@ -278,6 +278,7 @@
     scan: "Scan",
     audio: "Audio",
     mode: "Delivery",
+    destination: "Output",
     raster: "Raster",
     field_rate_hz: "Field rate"
   };
@@ -426,22 +427,35 @@
     var host = $("info-table");
     if (!host) return;
     var inputs = channelLabels(samples, "nexencoder_input_info", "input");
-    var outputs = channelLabels(samples, "nexencoder_output_info", "output");
-    var ids = {};
-    Object.keys(inputs).forEach(function (id) { ids[id] = true; });
-    Object.keys(outputs).forEach(function (id) { ids[id] = true; });
-    var keys = Object.keys(ids).sort();
-    if (!keys.length) {
+    var deliveries = [];
+    samples.forEach(function (sample) {
+      if (sample.name !== "nexencoder_output_info") return;
+      deliveries.push(sample.labels || {});
+    });
+    deliveries.sort(function (a, b) {
+      var ao = String(a.output || "") + "\n" + String(a.destination || "");
+      var bo = String(b.output || "") + "\n" + String(b.destination || "");
+      return ao < bo ? -1 : ao > bo ? 1 : 0;
+    });
+    var seen = {};
+    var lines = deliveries.map(function (output) {
+      var id = output.output || "";
+      seen[id] = true;
+      return { id: id, input: inputs[id] || {}, output: output };
+    });
+    Object.keys(inputs).sort().forEach(function (id) {
+      if (!seen[id]) lines.push({ id: id, input: inputs[id], output: {} });
+    });
+    if (!lines.length) {
       host.innerHTML = '<p class="muted">No samples yet</p>';
       return;
     }
-    var rows = keys.map(function (id) {
-      var input = inputs[id] || {};
-      var output = outputs[id] || {};
-      return "<tr><td>" + esc(id) + "</td><td>" + esc(cell(input, "format")) + "</td><td>"
-        + esc(cell(input, "scan")) + "</td><td>" + esc(cell(input, "audio")) + "</td><td>"
-        + esc(cell(input, "raster")) + "</td><td>" + esc(cell(input, "field_rate_hz")) + "</td><td>"
-        + esc(cell(output, "mode")) + "</td></tr>";
+    var rows = lines.map(function (line) {
+      var name = line.output.destination ? (line.id + " · " + line.output.destination) : line.id;
+      return "<tr><td>" + esc(name) + "</td><td>" + esc(cell(line.input, "format")) + "</td><td>"
+        + esc(cell(line.input, "scan")) + "</td><td>" + esc(cell(line.input, "audio")) + "</td><td>"
+        + esc(cell(line.input, "raster")) + "</td><td>" + esc(cell(line.input, "field_rate_hz")) + "</td><td>"
+        + esc(cell(line.output, "mode")) + "</td></tr>";
     }).join("");
     host.innerHTML = '<table class="metrics-table"><thead><tr><th>Channel</th><th>Format</th><th>Scan</th><th>Audio</th><th>Raster</th><th>Field rate</th><th>Delivery</th></tr></thead><tbody>'
       + rows + "</tbody></table>";

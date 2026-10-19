@@ -485,6 +485,9 @@ def test_status_contract_and_health_are_separate(tmp_path):
     assert channel_a["pipeline"]["gstreamer"] is False
     assert channel_a["preview"]["whep"] == "http://enc.example:8889/inputA/whep"
     assert channel_a["transport"]["mode"] == "listener"
+    assert [item["id"] for item in channel_a["destinations"]] == ["1"]
+    assert channel_a["destinations"][0]["destination"] == channel_a["transport"]["destination"]
+    assert channel_a["destinations"][0]["connected"] is True
     assert channel_a["transport"]["latency_ms"] == 1500
     assert channel_a["transport"]["srt"]["rtt_ms"] == 12.5
     assert channel_a["transport"]["srt"]["bandwidth_bps"] == 8200000
@@ -503,6 +506,26 @@ def test_status_contract_and_health_are_separate(tmp_path):
     assert "audio_levels_unavailable" in body["limitations"]
     assert "hls_push_connected_is_process" in body["limitations"]
     assert "srt_stats_unavailable" not in body["limitations"]
+
+
+def test_status_lists_every_destination(tmp_path):
+    agent = _agent(tmp_path)
+    save_config(agent.encoder_config, {
+        "inputs": {"A": {"bitrate": 12}},
+        "outputs": {"A": [
+            {"mode": "srt-listener", "port": 9000},
+            {"id": "2", "mode": "hls-pull", "url": ""},
+        ]},
+    })
+    body = agent.status("enc.example")
+    channel_a = {item["id"]: item for item in body["outputs"]}["A"]
+    assert channel_a["video"]["bitrate_configured_bps"] == 12_000_000
+    assert channel_a["connected"] is True
+    assert channel_a["transport"]["config_mode"] == "srt-listener"
+    assert [item["id"] for item in channel_a["destinations"]] == ["1", "2"]
+    assert channel_a["destinations"][1]["connected"] is False
+    assert channel_a["destinations"][1]["destination"].endswith(f"{os.sep}A{os.sep}2{os.sep}index.m3u8")
+    assert channel_a["pipeline"]["egress"] == "mixed"
 
 
 def test_control_logs_caller_and_returns_state(tmp_path, caplog):
@@ -708,3 +731,87 @@ def test_token_mode_warning(tmp_path):
     assert token_world_readable(path) is None
     path.chmod(0o644)
     assert token_world_readable(path)
+
+
+def test_effect_slug_recall_and_on_air(tmp_path):
+    from nexencoder.effects import upsert_preset
+    from nexencoder.noc import effect_slug
+
+    assert effect_slug("Lower Third") == "lower_third"
+    assert effect_slug("Side-bar") == "side-bar"
+    assert effect_slug("A/B bug") == "a_b_bug"
+    assert effect_slug("  Bug!! ") == "bug"
+    agent = _agent(tmp_path)
+    state = tmp_path / "state"
+    upsert_preset(state, {
+        "name": "Lower Third",
+        "format": "1080i59.94",
+        "in_frames": 0,
+        "out_frames": 8,
+        "layers": [],
+    })
+    httpd, port = _start(agent)
+    try:
+        status, body = _request(port, "/api/noc/v1/outputs/a/effects/lower_third", token=TOKEN)
+        quiet = json.loads(body)
+        assert status == 200 and quiet["exists"] is True and quiet["active"] is False and quiet["slug"] == "lower_third"
+        status, body = _request(port, "/api/noc/v1/outputs/a/effects/recall/lower_third", token=TOKEN, method="POST")
+        recalled = json.loads(body)
+        assert status == 200 and recalled["preset"] == "Lower Third" and recalled["channel"] == "A"
+        status, body = _request(port, "/api/noc/v1/outputs/a/effects/lower_third", token=TOKEN)
+        assert json.loads(body)["active"] is True
+        status, body = _request(port, "/api/noc/v1/outputs/b/effects/lower_third", token=TOKEN)
+        assert json.loads(body)["active"] is False
+        status, body = _request(port, "/api/noc/v1/effects/lower_third", token=TOKEN)
+        assert json.loads(body)["name"] == "Lower Third" and json.loads(body)["active"] == ["A"]
+        status, body = _request(port, "/api/noc/v1/outputs/a/effects/clear", token=TOKEN, method="POST")
+        assert status == 200 and json.loads(body)["active"] == []
+        status, body = _request(port, "/api/noc/v1/outputs/a/effects/recall/missing_store", token=TOKEN, method="POST")
+        assert status == 400 and "unknown preset" in json.loads(body)["detail"]
+        status, body = _request(port, "/api/noc/v1/outputs/a/effects/missing_store", token=TOKEN)
+        missing = json.loads(body)
+        assert status == 200 and missing["exists"] is False and missing["active"] is False
+        status, body = _request(port, "/api/noc/v1/outputs/a/restart", token=TOKEN, method="POST")
+        assert status == 200
+        upsert_preset(state, {
+            "name": "Bug",
+            "format": "1080i59.94",
+            "in_frames": 0,
+            "out_frames": 0,
+            "layers": [],
+        })
+        upsert_preset(state, {
+            "name": "bug",
+            "format": "1080i59.94",
+            "in_frames": 0,
+            "out_frames": 0,
+            "layers": [],
+        })
+        status, body = _request(port, "/api/noc/v1/outputs/a/effects/recall/bug", token=TOKEN, method="POST")
+        assert status == 400 and json.loads(body)["detail"] == "preset slug is not unique"
+        status, body = _request(port, "/api/noc/v1/outputs/a/effects/bug", token=TOKEN)
+        assert status == 400 and json.loads(body)["detail"] == "preset slug is not unique"
+    finally:
+        httpd.shutdown()
+
+
+def test_token_file_is_reread_and_a_revoked_token_fails(tmp_path):
+    from nexencoder.noc import create_api_token, delete_api_token, list_api_tokens, revoke_api_token
+
+    path = tmp_path / "noc.token"
+    agent = _agent(tmp_path)
+    agent.token_path = path
+    assert agent.token_matches(TOKEN) is True
+    path.write_text(TOKEN + "\n", encoding="utf-8")
+    assert agent.token_matches(TOKEN) is True
+    created = create_api_token(path, "Companion")
+    assert agent.token_matches(created["secret"]) is True
+    assert agent.token_matches(TOKEN) is True
+    public = json.dumps(list_api_tokens(path))
+    assert TOKEN not in public and created["secret"] not in public and "secret" not in public
+    revoke_api_token(path, "legacy")
+    assert agent.token_matches(TOKEN) is False
+    assert agent.token_matches(created["secret"]) is True
+    delete_api_token(path, created["id"])
+    assert agent.token_matches(created["secret"]) is False
+    assert agent.token_matches(TOKEN) is False

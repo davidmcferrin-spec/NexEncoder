@@ -19,6 +19,7 @@
   var still = new Image();
   var drag = -1;
   var timer = 0;
+  var storedPresets = [];
 
   function raster() {
     return RASTERS[formatName] || [1920, 1080];
@@ -425,9 +426,10 @@
   }
 
   function renderPresets(presets) {
+    storedPresets = presets || [];
     var list = document.getElementById("preset-list");
     list.innerHTML = "";
-    presets.forEach(function (preset) {
+    storedPresets.forEach(function (preset) {
       var item = document.createElement("li");
       var name = document.createElement("span");
       name.textContent = preset.name + " · " + preset.format;
@@ -459,6 +461,83 @@
       item.appendChild(name);
       item.appendChild(actions);
       list.appendChild(item);
+    });
+  }
+
+  function effectSlug(name) {
+    var cleaned = "";
+    var underscore = false;
+    var text = String(name || "").trim().toLowerCase();
+    var i;
+    for (i = 0; i < text.length; i++) {
+      var ch = text.charAt(i);
+      var code = text.charCodeAt(i);
+      var keep = code < 128 && ((code >= 48 && code <= 57) || (code >= 97 && code <= 122) || ch === "-");
+      if (keep) {
+        cleaned += ch;
+        underscore = false;
+      } else if (cleaned && !underscore) {
+        cleaned += "_";
+        underscore = true;
+      } else {
+        underscore = !!cleaned;
+      }
+    }
+    return cleaned.replace(/^_+|_+$/g, "");
+  }
+
+  function urlLine(label, method, url) {
+    var row = document.createElement("p");
+    var title = document.createElement("strong");
+    var code = document.createElement("code");
+    row.className = "api-url";
+    title.textContent = label;
+    code.textContent = method + " " + url;
+    row.appendChild(title);
+    row.appendChild(code);
+    return row;
+  }
+
+  function paintHelp() {
+    var host = window.location.hostname || "this-host";
+    var origin = window.location.protocol + "//" + host + ":8790";
+    var box = document.getElementById("api-help-body");
+    var counts = {};
+    box.textContent = "";
+    var intro = document.createElement("p");
+    intro.textContent = "Send Authorization: Bearer and a token from Services. The examples below do not include a token.";
+    box.appendChild(intro);
+    storedPresets.forEach(function (preset) {
+      var slug = effectSlug(preset.name);
+      counts[slug] = (counts[slug] || 0) + 1;
+    });
+    storedPresets.forEach(function (preset) {
+      var slug = effectSlug(preset.name);
+      var block = document.createElement("section");
+      var title = document.createElement("h3");
+      title.textContent = preset.name;
+      block.appendChild(title);
+      if (counts[slug] > 1) {
+        var warn = document.createElement("p");
+        warn.className = "error";
+        warn.textContent = "The slug " + slug + " is shared by more than one preset, so these URLs will be refused.";
+        block.appendChild(warn);
+      }
+      ["a", "b"].forEach(function (id) {
+        block.appendChild(urlLine("Recall on " + id.toUpperCase(), "POST", origin + "/api/noc/v1/outputs/" + id + "/effects/recall/" + slug));
+        block.appendChild(urlLine("On air " + id.toUpperCase(), "GET", origin + "/api/noc/v1/outputs/" + id + "/effects/" + slug));
+      });
+      box.appendChild(block);
+    });
+    if (!storedPresets.length) {
+      var empty = document.createElement("p");
+      empty.className = "muted";
+      empty.textContent = "Save a preset and the recall and on-air URLs appear here.";
+      box.appendChild(empty);
+    }
+    ["a", "b"].forEach(function (id) {
+      box.appendChild(urlLine("Clear " + id.toUpperCase(), "POST", origin + "/api/noc/v1/outputs/" + id + "/effects/clear"));
+      box.appendChild(urlLine("Restart " + id.toUpperCase(), "POST", origin + "/api/noc/v1/outputs/" + id + "/restart"));
     });
   }
 
@@ -550,6 +629,14 @@
     fitStage();
     draw();
     paintLayers();
+    var help = document.getElementById("api-help");
+    if (help) {
+      help.addEventListener("click", function () {
+        paintHelp();
+        var dialog = document.getElementById("api-help-dialog");
+        if (dialog && typeof dialog.showModal === "function" && !dialog.open) dialog.showModal();
+      });
+    }
   }
 
   if (document.getElementById("squeeze")) boot();

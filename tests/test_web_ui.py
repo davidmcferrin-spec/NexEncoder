@@ -90,7 +90,7 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     feed = (WEB / "includes" / "feed.php").read_text(encoding="utf-8")
     assert "http://127.0.0.1:8788" in feed
     assert "NexEncoder" in feed
-    for script in ("config.php", "bars.php", "service.php", "preset.php", "detect.php", "support.php", "journal-clear.php"):
+    for script in ("config.php", "bars.php", "service.php", "preset.php", "detect.php", "support.php", "journal-clear.php", "tokens.php"):
         text = (WEB / "admin" / script).read_text(encoding="utf-8")
         assert "includes/feed.php" in text
         assert "nexencoder_admin_request" in text
@@ -109,6 +109,7 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     assert "/live/log.php" in services
     assert "/admin/journal.php" not in services and "/admin/support.php" in services
     assert "/admin/journal-clear.php" in services
+    assert "/admin/tokens.php" in services
     assert "X-Journal-Clear" not in services
     assert "Journal cleared" in services
     assert "Delete the host journal" in services
@@ -120,6 +121,7 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     assert 'id="clear-journal"' in page and "Clear log" in page
     assert 'id="dump-clear"' not in page
     assert 'class="support-bundle-bar"' in page
+    assert 'id="token-panel"' in page and 'id="token-list"' in page and "Create token" in page
     assert page.index("support-bundle-bar") < page.index('id="unit-list"')
     assert 'id="dump-journal"' not in page
     assert "Download zip" in page
@@ -127,9 +129,11 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     effects = (WEB / "assets" / "effects.js").read_text(encoding="utf-8")
     assert "/admin/preset.php" in effects and "/admin/recall.php" in effects
     assert "delete: true" in effects and "Delete preset " in effects
+    assert "effectSlug" in effects and "/effects/recall/" in effects
     assert "/live/still.php" in effects
     assert "LAYER_SLOTS = 2" in effects and "fitStage" in effects
     effects_page = (WEB / "effects.php").read_text(encoding="utf-8")
+    assert 'id="api-help"' in effects_page and 'id="api-help-dialog"' in effects_page
     assert 'id="stage-scale"' in effects_page
     assert "up to two CG layers" in effects_page
     preview = (WEB / "assets" / "preview.js").read_text(encoding="utf-8")
@@ -157,6 +161,9 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     assert 'id="lock-A"' in dashboard and 'id="lock-B"' in dashboard
     assert 'id="restart-A"' in dashboard and 'id="restart-B"' in dashboard
     assert dashboard.count('data-restart="A"') == 2 and dashboard.count('data-restart="B"') == 2
+    assert 'data-add-output="A"' in dashboard and 'data-output-list="B"' in dashboard
+    assert 'id="bitrate-A"' in dashboard and 'id="bitrate-B"' in dashboard
+    assert "MAX_OUTPUTS = 4" in js and "data-add-output" in js
     for retired in ("inputs.php", "outputs.php", "monitor.php"):
         text = (WEB / retired).read_text(encoding="utf-8")
         assert "Location: index.php" in text

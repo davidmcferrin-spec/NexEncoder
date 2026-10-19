@@ -1,4 +1,4 @@
-"""Run one channel: ffmpeg capture | tsp spliceinject, plus the SRT or HLS egress.
+"""Run one channel: ffmpeg capture | tsp spliceinject, plus one egress per destination.
 
 ``python -m nexencoder.channel --id A`` is what the systemd template starts.
 A dead child, a failed exec, or a stalled frame counter restarts the pipeline
@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 
 from .cgfeed import SlotWriter, supervise
-from .channels import INPUT_SRT_PORTS, load_config
+from .channels import INPUT_SRT_PORTS, hls_publish_dir, load_config, srt_stats_path
 from .effects import (
     bars_path,
     effect_path,
@@ -478,6 +478,48 @@ def run_preview(channel_id: str, stop: threading.Event, spawn, pause) -> None:
         pause(1)
 
 
+def watch_egress(
+    proc: subprocess.Popen | None,
+    relaunch,
+    stop: threading.Event,
+    hold: threading.Event,
+    pause,
+    label: str,
+    backoff_start: float = BACKOFF_START,
+    backoff_cap: float = BACKOFF_CAP,
+) -> None:
+    """Restart one destination when it exits while the encode is up.
+
+    ``hold`` is set while the encode itself is down or starting. A dead
+    destination waits out that window instead of flapping beside a restart.
+    ``stop`` ends the channel and tears this process down.
+    """
+    delay = backoff_start
+    current = proc
+    while not stop.is_set():
+        if current is not None and current.poll() is None:
+            if stop.wait(0.5):
+                break
+            continue
+        if hold.is_set():
+            if stop.wait(0.05):
+                break
+            continue
+        log.warning("%s exited; restarting in %ss", label, delay)
+        if stop.wait(delay):
+            break
+        try:
+            current = relaunch()
+        except OSError as exc:
+            log.error("%s failed to start: %s", label, exc)
+            delay = min(delay * 2, backoff_cap)
+            current = None
+            continue
+        delay = backoff_start
+    if current is not None:
+        _stop_children([current], pause)
+
+
 def note_fault(state_dir: Path | None, channel_id: str, message: str) -> None:
     """Remember the latest pipeline fault for the NOC agent."""
     if state_dir is None:
@@ -524,9 +566,8 @@ def run_channel(
 ) -> int:
     config = load_config(config_path)
     spec_in = config["inputs"][channel_id]
-    spec_out = config["outputs"][channel_id]
-    publish = publish_root / channel_id
-    publish.mkdir(parents=True, exist_ok=True)
+    destinations = config["outputs"][channel_id]
+    bitrate = int(spec_in["bitrate"])
     progress_file = None
     progress_arg = None
     if state_dir is not None:
@@ -559,29 +600,37 @@ def run_channel(
     try:
         if source == "srt":
             capture = clock_argv(
-                channel_id, spec_in["format"], spec_out["bitrate"],
+                channel_id, spec_in["format"], bitrate,
                 progress_path=progress_arg, effect_state=effect_file,
                 hold_path=hold_file, pcm_path=pcm_file,
             )
         else:
             capture = capture_argv(
-                channel_id, spec_in["device"], spec_in["format"], spec_out["bitrate"],
+                channel_id, spec_in["device"], spec_in["format"], bitrate,
                 progress_path=progress_arg, effect_state=effect_file, still_path=still_file,
                 hold_path=hold_file, pcm_path=pcm_file,
             )
         splice = splice_argv(channel_id)
+        wants_srt = any(item["mode"].startswith("srt-") for item in destinations)
         stats_on = False
-        if spec_out["mode"].startswith("srt-"):
+        if wants_srt:
             stats_on = tsp_supports_srt_stats() if srt_statistics is None else bool(srt_statistics)
-        egress = egress_argv(
-            channel_id,
-            spec_out["mode"],
-            spec_out["host"],
-            spec_out["port"],
-            spec_out["url"],
-            str(publish),
-            srt_statistics=stats_on,
-        )
+        plans = []
+        for spec in destinations:
+            slot = spec["id"]
+            publish = hls_publish_dir(publish_root, channel_id, slot)
+            publish.mkdir(parents=True, exist_ok=True)
+            stats = stats_on and spec["mode"].startswith("srt-")
+            argv = egress_argv(
+                channel_id,
+                spec["mode"],
+                spec["host"],
+                spec["port"],
+                spec["url"],
+                str(publish),
+                srt_statistics=stats,
+            )
+            plans.append({"spec": spec, "argv": argv, "stats": stats, "publish": publish})
     except ValueError as exc:
         log.error("%s", exc)
         note_fault(state_dir, channel_id, str(exc))
@@ -593,6 +642,12 @@ def run_channel(
     vanc_stop = threading.Event()
     effect_stop = threading.Event()
     preview_stop = threading.Event()
+    egress_stop = threading.Event()
+    # Set while the encode is down so a dead destination does not restart beside it.
+    egress_hold = threading.Event()
+    egress_hold.set()
+    egress_threads: list[threading.Thread] = []
+    watchers_started = False
     preview_thread = None
     if manage_preview:
         preview_thread = threading.Thread(
@@ -648,11 +703,20 @@ def run_channel(
         vanc_stop.set()
         effect_stop.set()
         preview_stop.set()
+        egress_stop.set()
+        egress_hold.set()
         _stop_children(children, pause)
 
     if install_signals:
         signal.signal(signal.SIGTERM, stop)
         signal.signal(signal.SIGINT, stop)
+
+    def launch_egress(plan: dict) -> subprocess.Popen:
+        pipe = subprocess.PIPE if plan["stats"] and state_dir is not None else None
+        proc = spawn(plan["argv"], stderr=pipe)
+        if pipe is not None and state_dir is not None:
+            start_srt_stats_reader(proc, srt_stats_path(state_dir, channel_id, plan["spec"]["id"]))
+        return proc
 
     notify("READY=1\n")
     ran = 0
@@ -680,17 +744,41 @@ def run_channel(
                     name="nexencoder-signal",
                     daemon=True,
                 ).start()
-            # Bind the program reader before spliceinject starts sending.
-            srt_pipe = subprocess.PIPE if stats_on and state_dir is not None else None
-            out = spawn(egress, stderr=srt_pipe)
-            started.append(out)
-            if srt_pipe is not None and state_dir is not None:
-                start_srt_stats_reader(out, state_dir / f"{channel_id}.srt.json")
+            # Bind every program reader before spliceinject starts sending.
+            # A later encode restart leaves a destination that is still up alone.
+            fresh: list[tuple[dict, subprocess.Popen]] = []
+            if not watchers_started:
+                for plan in plans:
+                    proc = launch_egress(plan)
+                    started.append(proc)
+                    fresh.append((plan, proc))
             tsp = spawn(splice, stdin=ffmpeg.stdout)
             started.append(tsp)
             splice_proc[0] = tsp
             if ffmpeg.stdout is not None:
                 ffmpeg.stdout.close()
+            if not watchers_started:
+                for plan, proc in fresh:
+                    slot = plan["spec"]["id"]
+                    thread = threading.Thread(
+                        target=watch_egress,
+                        kwargs={
+                            "proc": proc,
+                            "relaunch": lambda plan=plan: launch_egress(plan),
+                            "stop": egress_stop,
+                            "hold": egress_hold,
+                            "pause": pause,
+                            "label": f"channel {channel_id} output {slot}",
+                            "backoff_start": backoff_start,
+                            "backoff_cap": backoff_cap,
+                        },
+                        name=f"nexencoder-egress-{channel_id}-{slot}",
+                        daemon=True,
+                    )
+                    thread.start()
+                    egress_threads.append(thread)
+                watchers_started = True
+                log.info("channel %s publishing %s destination(s)", channel_id, len(plans))
         except OSError as exc:
             log.error("channel %s failed to start: %s", channel_id, exc)
             note_fault(state_dir, channel_id, f"failed to start: {exc}")
@@ -700,13 +788,15 @@ def run_channel(
             pause(delay)
             delay = min(delay * 2, backoff_cap)
             continue
-        children[:] = started
+        children[:] = [ffmpeg, tsp]
         ran += 1
         note_runs(state_dir, channel_id, ran)
         opened = clock()
         last_frame = 0
         last_advance = opened
         stalled = False
+        if all(proc.poll() is None for proc in children):
+            egress_hold.clear()
         while not stopping and all(proc.poll() is None for proc in children):
             pause(1)
             notify("WATCHDOG=1\n")
@@ -718,6 +808,7 @@ def run_channel(
             if stalled:
                 log.warning("channel %s stalled at frame %s", channel_id, last_frame)
                 break
+        egress_hold.set()
         _stop_children(children, pause)
         splice_proc[0] = None
         if stopping or (cycles is not None and ran >= cycles):
@@ -739,6 +830,10 @@ def run_channel(
     vanc_stop.set()
     effect_stop.set()
     preview_stop.set()
+    egress_stop.set()
+    egress_hold.set()
+    for thread in egress_threads:
+        thread.join(timeout=5)
     if preview_thread is not None:
         preview_thread.join(timeout=5)
     if vanc_listen:

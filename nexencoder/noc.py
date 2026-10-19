@@ -15,6 +15,7 @@ import ipaddress
 import json
 import logging
 import re
+import secrets
 import socket
 import ssl
 import subprocess
@@ -27,7 +28,7 @@ from urllib.parse import parse_qsl, parse_qs, unquote, urlencode, urlsplit, urlu
 from . import __version__
 from .audit import try_record
 from .cgfeed import detect_html_backend, ndi_available as ndi_receiver_available
-from .channels import CHANNELS, INPUT_SRT_PORTS, load_config
+from .channels import CHANNELS, INPUT_SRT_PORTS, hls_publish_dir, load_config, srt_stats_path
 from .effects import _load_live, load_presets, normalize_channel, recall_effect
 from .hoststats import HostCollector, parse_uptime
 from .pipeline import (
@@ -64,6 +65,7 @@ _NAME_RE = re.compile(
     r"(?:\.[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?)*"
 )
 _TOKEN_RE = re.compile(r"[A-Za-z0-9._~+/-]{16,256}")
+_LABEL_RE = re.compile(r"[^\x00-\x1f]{1,40}")
 _FAIL_RESULTS = frozenset({
     "exit-code", "timeout", "signal", "core-dump", "watchdog", "start-limit-hit",
 })
@@ -247,16 +249,166 @@ def load_noc_config(path: Path) -> dict:
     return config
 
 
-def read_token(path: Path) -> str:
+def effect_slug(name: str) -> str:
+    """Lowercase path segment. Spaces and other separators become one underscore."""
+    cleaned: list[str] = []
+    underscore = False
+    for ch in name.strip().lower():
+        if ch.isascii() and (ch.isalnum() or ch == "-"):
+            cleaned.append(ch)
+            underscore = False
+        elif cleaned and not underscore:
+            cleaned.append("_")
+            underscore = True
+        else:
+            underscore = bool(cleaned)
+    return "".join(cleaned).strip("_")
+
+
+def _token_record(item: dict) -> dict | None:
+    token = item.get("token")
+    label = item.get("label")
+    state = item.get("state")
+    ident = item.get("id")
+    created = item.get("created")
+    if not isinstance(token, str) or not _TOKEN_RE.fullmatch(token):
+        return None
+    if not isinstance(ident, str) or not ident.strip() or len(ident) > 40:
+        return None
+    if not isinstance(label, str) or not _LABEL_RE.fullmatch(label.strip()):
+        return None
+    if state not in {"active", "revoked"}:
+        return None
+    if isinstance(created, bool) or not isinstance(created, int) or created < 0:
+        created = 0
+    return {
+        "id": ident.strip(),
+        "label": label.strip(),
+        "state": state,
+        "created": created,
+        "token": token,
+    }
+
+
+def load_token_records(path: Path) -> list[dict]:
+    """Active and revoked tokens. A file of bare token lines stays valid."""
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
-        return ""
+        return []
+    records: list[dict] = []
+    legacy = 0
     for line in text.splitlines():
-        token = line.strip()
-        if token and not token.startswith("#"):
-            return token
+        raw = line.strip()
+        if not raw or raw.startswith("#"):
+            continue
+        if raw.startswith("{"):
+            try:
+                item = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                record = _token_record(item)
+                if record is not None:
+                    records.append(record)
+            continue
+        if _TOKEN_RE.fullmatch(raw):
+            legacy += 1
+            records.append({
+                "id": "legacy" if legacy == 1 else f"legacy-{legacy}",
+                "label": "NexNOC" if legacy == 1 else f"Token {legacy}",
+                "state": "active",
+                "created": 0,
+                "token": raw,
+            })
+    return records
+
+
+def read_token(path: Path) -> str:
+    for record in load_token_records(path):
+        if record["state"] == "active":
+            return record["token"]
     return ""
+
+
+def public_token(record: dict) -> dict:
+    token = record["token"]
+    return {
+        "id": record["id"],
+        "label": record["label"],
+        "state": record["state"],
+        "created": record["created"],
+        "last4": token[-4:],
+    }
+
+
+def save_token_records(path: Path, records: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = "".join(json.dumps(record, separators=(",", ":")) + "\n" for record in records)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(body, encoding="utf-8")
+    temporary.replace(path)
+    try:
+        path.chmod(0o640)
+    except OSError:
+        pass
+    try:
+        import grp
+
+        os.chown(path, 0, grp.getgrnam("nexencoder").gr_gid)
+    except (ImportError, KeyError, OSError, AttributeError):
+        pass
+
+
+def list_api_tokens(path: Path) -> list[dict]:
+    return [public_token(record) for record in load_token_records(path)]
+
+
+def _fresh_id(records: list[dict]) -> str:
+    used = {record["id"] for record in records}
+    ident = secrets.token_hex(4)
+    while ident in used:
+        ident = secrets.token_hex(4)
+    return ident
+
+
+def create_api_token(path: Path, label: str, now: int | None = None) -> dict:
+    text = label.strip() if isinstance(label, str) else ""
+    if not _LABEL_RE.fullmatch(text):
+        raise ValueError("label must be 1 to 40 characters")
+    records = load_token_records(path)
+    record = {
+        "id": _fresh_id(records),
+        "label": text,
+        "state": "active",
+        "created": int(time.time() if now is None else now),
+        "token": secrets.token_hex(32),
+    }
+    records.append(record)
+    save_token_records(path, records)
+    shown = public_token(record)
+    shown["secret"] = record["token"]
+    return shown
+
+
+def revoke_api_token(path: Path, token_id: str) -> None:
+    records = load_token_records(path)
+    found = False
+    for record in records:
+        if record["id"] == token_id:
+            record["state"] = "revoked"
+            found = True
+    if not found:
+        raise ValueError("unknown token")
+    save_token_records(path, records)
+
+
+def delete_api_token(path: Path, token_id: str) -> None:
+    records = load_token_records(path)
+    kept = [record for record in records if record["id"] != token_id]
+    if len(kept) == len(records):
+        raise ValueError("unknown token")
+    save_token_records(path, kept)
 
 
 def token_world_readable(path: Path) -> str | None:
@@ -520,7 +672,8 @@ def destination(channel_id: str, spec: dict, hls_root: Path) -> str:
     if mode == "hls-push":
         return redact_url(spec.get("url") or "")
     if mode == "hls-pull":
-        return str(hls_root / channel_id / "index.m3u8")
+        slot = str(spec.get("id") or "1")
+        return str(hls_publish_dir(hls_root, channel_id, slot) / "index.m3u8")
     return ""
 
 
@@ -626,8 +779,10 @@ class Agent:
         hostname: str | None = None,
         html_backend=None,
         ndi_ready=None,
+        token_path: Path | None = None,
     ) -> None:
         self.token = token
+        self.token_path = token_path
         self.noc = noc
         self.encoder_config = encoder_config
         self.state_dir = state_dir
@@ -641,6 +796,29 @@ class Agent:
         self.trust_proxy = bool(noc.get("trust_proxy"))
         self.html_backend = html_backend or detect_html_backend
         self.ndi_ready = ndi_ready or ndi_receiver_available
+
+    def token_matches(self, presented: str) -> bool:
+        if not presented:
+            return False
+        path = self.token_path
+        if path is not None:
+            try:
+                present = path.is_file()
+            except OSError:
+                present = False
+            if present:
+                digest = hashlib.sha256(presented.encode("utf-8")).digest()
+                matched = False
+                for record in load_token_records(path):
+                    if record["state"] != "active":
+                        continue
+                    candidate = hashlib.sha256(record["token"].encode("utf-8")).digest()
+                    if hmac.compare_digest(digest, candidate):
+                        matched = True
+                return matched
+        if not self.token:
+            return False
+        return tokens_match(presented, self.token)
 
     def identity(self, uptime: int | None) -> dict:
         return {
@@ -680,9 +858,41 @@ class Agent:
             return unit_view(None, now)
         return unit_view(parse_show(text), now)
 
+    def _delivery(self, channel_id: str, spec: dict, encoding: bool, now: float) -> dict:
+        """One destination. ``transport`` on the channel stays a copy of the first."""
+        config_mode = spec["mode"]
+        protocol, transport_name = transport_mode(config_mode)
+        srt_body = None
+        srt_fresh = False
+        udp = None
+        playlist = None
+        if protocol == "srt":
+            loaded = load_srt_snapshot(
+                srt_stats_path(self.state_dir, channel_id, spec["id"]), now, SRT_FRESH_SECONDS,
+            )
+            srt_body = loaded or empty_srt()
+            srt_fresh = bool(srt_body.get("fresh"))
+            udp = udp_peer_connected(self.proc_root, config_mode, int(spec["port"]))
+        elif config_mode == "hls-pull":
+            playlist = playlist_fresh(
+                hls_publish_dir(self.hls_root, channel_id, spec["id"]) / "index.m3u8", now,
+            )
+        connected, evidence = connection(config_mode, encoding, srt_fresh, udp, playlist)
+        return {
+            "id": spec["id"],
+            "connected": connected,
+            "connected_evidence": evidence,
+            "protocol": protocol,
+            "mode": transport_name,
+            "config_mode": config_mode,
+            "destination": destination(channel_id, spec, self.hls_root),
+            "latency_ms": SRT_LATENCY_MS if protocol == "srt" else None,
+            "segment_seconds": HLS_SEGMENT_SECONDS if protocol == "hls" else None,
+            "srt": srt_body,
+        }
+
     def _output(self, channel_id: str, config: dict, now: float, preview_host: str) -> dict:
         spec_in = config["inputs"][channel_id]
-        spec_out = config["outputs"][channel_id]
         mode_name = spec_in["format"]
         mode = signal_mode(mode_name)
         unit = CHANNEL_UNITS[channel_id]
@@ -692,31 +902,26 @@ class Agent:
             encoding = bool(progress["fresh"])
         else:
             encoding = view["active_state"] == "active" and bool(progress["fresh"])
-        config_mode = spec_out["mode"]
-        protocol, transport_name = transport_mode(config_mode)
-        srt_body = None
-        srt_fresh = False
-        udp = None
-        playlist = None
-        if protocol == "srt":
-            loaded = load_srt_snapshot(self.state_dir / f"{channel_id}.srt.json", now, SRT_FRESH_SECONDS)
-            srt_body = loaded or empty_srt()
-            srt_fresh = bool(srt_body.get("fresh"))
-            udp = udp_peer_connected(self.proc_root, config_mode, int(spec_out["port"]))
-        elif config_mode == "hls-pull":
-            playlist = playlist_fresh(self.hls_root / channel_id / "index.m3u8", now)
-        connected, evidence = connection(config_mode, encoding, srt_fresh, udp, playlist)
+        deliveries = [
+            self._delivery(channel_id, spec, encoding, now)
+            for spec in config["outputs"][channel_id]
+        ]
+        primary = deliveries[0]
         fault, fault_unix = read_fault(self.state_dir / f"{channel_id}.error")
         if not fault and view["failed"] and view["result"] and view["result"] != "success":
             fault = view["result"]
         capture = "ffmpeg-lavfi" if spec_in.get("source") == "srt" else "ffmpeg-decklink"
-        egress = "tsduck-srt" if protocol == "srt" else "ffmpeg-hls"
+        protocols = {item["protocol"] for item in deliveries}
+        if protocols == {"srt"}:
+            egress = "tsduck-srt"
+        elif protocols == {"hls"}:
+            egress = "ffmpeg-hls"
+        else:
+            egress = "mixed"
         scheme = self.noc.get("preview_scheme") or "http"
         preview = whep_url(channel_id, preview_host, int(self.noc.get("preview_port") or 8889))
         if scheme == "https" and preview.startswith("http://"):
             preview = "https://" + preview[len("http://"):]
-        latency = SRT_LATENCY_MS if protocol == "srt" else None
-        segment = HLS_SEGMENT_SECONDS if protocol == "hls" else None
         return {
             "id": channel_id,
             "unit": unit,
@@ -724,8 +929,8 @@ class Agent:
             "sub_state": view["sub_state"],
             "failed": view["failed"],
             "encoding": encoding,
-            "connected": connected,
-            "connected_evidence": evidence,
+            "connected": primary["connected"],
+            "connected_evidence": primary["connected_evidence"],
             "uptime_seconds": view["uptime_seconds"],
             "uptime_known": view["uptime_known"],
             "service_restarts": view["service_restarts"],
@@ -743,7 +948,7 @@ class Agent:
                 "codec": "h264",
                 "encoder": "libx264",
                 "profile": "high",
-                "bitrate_configured_bps": int(spec_out["bitrate"]) * 1_000_000,
+                "bitrate_configured_bps": int(spec_in["bitrate"]) * 1_000_000,
                 "bitrate_measured_bps": progress["bitrate_bps"],
                 "width": mode.width,
                 "height": mode.height,
@@ -774,14 +979,15 @@ class Agent:
             },
             "preview": {"path": preview_path(channel_id), "whep": preview},
             "transport": {
-                "protocol": protocol,
-                "mode": transport_name,
-                "config_mode": config_mode,
-                "destination": destination(channel_id, spec_out, self.hls_root),
-                "latency_ms": latency,
-                "segment_seconds": segment,
-                "srt": srt_body,
+                "protocol": primary["protocol"],
+                "mode": primary["mode"],
+                "config_mode": primary["config_mode"],
+                "destination": primary["destination"],
+                "latency_ms": primary["latency_ms"],
+                "segment_seconds": primary["segment_seconds"],
+                "srt": primary["srt"],
             },
+            "destinations": deliveries,
             "_systemctl_unknown": view["active_state"] == "unknown",
         }
 
@@ -806,9 +1012,21 @@ class Agent:
         outputs = [self._output(channel_id, config, now, preview_host) for channel_id in CHANNELS]
         limitations = list(host.get("limitations") or [])
         limitations.append("audio_levels_unavailable")
-        if any(item["transport"]["protocol"] == "srt" and not (item["transport"]["srt"] or {}).get("fresh") for item in outputs):
+        def _deliveries(item: dict) -> list[dict]:
+            found = item.get("destinations")
+            return found if isinstance(found, list) and found else [item["transport"]]
+
+        if any(
+            delivery["protocol"] == "srt" and not (delivery.get("srt") or {}).get("fresh")
+            for item in outputs
+            for delivery in _deliveries(item)
+        ):
             limitations.append("srt_stats_unavailable")
-        if any(item["transport"]["config_mode"] == "hls-push" for item in outputs):
+        if any(
+            delivery["config_mode"] == "hls-push"
+            for item in outputs
+            for delivery in _deliveries(item)
+        ):
             limitations.append("hls_push_connected_is_process")
         if any(item["_systemctl_unknown"] for item in outputs):
             limitations.append("systemctl_unavailable")
@@ -893,11 +1111,36 @@ class Agent:
             raise NocError(400, "bad_request", "preset name must be 1 to 64 characters")
         return text
 
+    def _output_id(self, raw: str) -> str:
+        text = unquote(raw).strip().upper()
+        if text not in CHANNELS:
+            raise NocError(400, "bad_request", "output must be A or B")
+        return text
+
+    def _slug_matches(self, raw: str) -> tuple[str, list[dict]]:
+        slug = effect_slug(unquote(raw))
+        if not slug or len(slug) > 64:
+            raise NocError(400, "bad_request", "preset name must be 1 to 64 characters")
+        matches = [item for item in load_presets(self.state_dir) if effect_slug(item["name"]) == slug]
+        return slug, matches
+
+    def _live_label(self, slug: str) -> str:
+        for channel_id in CHANNELS:
+            live = _load_live(self.state_dir, channel_id)
+            current = live.get("preset")
+            if isinstance(current, str) and current and effect_slug(current) == slug:
+                return current
+        return slug
+
     def _active_channels(self, name: str) -> list[str]:
+        slug = effect_slug(name)
         found = []
         for channel_id in CHANNELS:
             live = _load_live(self.state_dir, channel_id)
-            if live.get("preset") == name:
+            current = live.get("preset")
+            if not isinstance(current, str) or not current:
+                continue
+            if current == name or (slug and effect_slug(current) == slug):
                 found.append(channel_id)
         return found
 
@@ -920,12 +1163,14 @@ class Agent:
             notes.append("NDI receiver is not installed; those layers stay transparent")
         return " ".join(notes)
 
-    def _effect_view(self, name: str, preset: dict | None) -> dict:
+    def _effect_view(self, name: str, preset: dict | None, slug: str = "") -> dict:
+        label = preset["name"] if preset else name
         return {
-            "name": name,
+            "name": label,
+            "slug": slug or effect_slug(label),
             "exists": preset is not None,
             "valid": preset is not None,
-            "active": self._active_channels(name),
+            "active": self._active_channels(label),
             "format": preset["format"] if preset else "",
             "warning": self._effect_warning(preset),
         }
@@ -947,13 +1192,43 @@ class Agent:
         }
 
     def effect_status(self, name: str) -> dict:
-        text = self._preset_name(name)
-        match = next((item for item in load_presets(self.state_dir) if item["name"] == text), None)
-        return {"ok": True, "api_version": API_VERSION, **self._effect_view(text, match)}
+        slug, matches = self._slug_matches(name)
+        if len(matches) > 1:
+            raise NocError(400, "bad_request", "preset slug is not unique")
+        preset = matches[0] if matches else None
+        label = preset["name"] if preset else self._live_label(slug)
+        return {"ok": True, "api_version": API_VERSION, **self._effect_view(label, preset, slug)}
+
+    def effect_on_air(self, channel_raw: str, name: str) -> dict:
+        channel_id = self._output_id(channel_raw)
+        slug, matches = self._slug_matches(name)
+        if len(matches) > 1:
+            raise NocError(400, "bad_request", "preset slug is not unique")
+        preset = matches[0] if matches else None
+        label = preset["name"] if preset else self._live_label(slug)
+        return {
+            "ok": True,
+            "api_version": API_VERSION,
+            "channel": channel_id,
+            "name": label,
+            "slug": slug,
+            "exists": preset is not None,
+            "valid": preset is not None,
+            "active": channel_id in self._active_channels(label),
+            "warning": self._effect_warning(preset),
+        }
+
+    def effect_recall_path(self, channel_raw: str, name: str, caller: str) -> dict:
+        channel_id = self._output_id(channel_raw)
+        slug, matches = self._slug_matches(name)
+        if len(matches) > 1:
+            raise NocError(400, "bad_request", "preset slug is not unique")
+        if not matches:
+            raise NocError(400, "bad_request", "unknown preset")
+        return self.effect_command(channel_id, "recall", {"preset": matches[0]["name"]}, caller)
 
     def effect_command(self, channel_id: str, action: str, body: dict, caller: str) -> dict:
-        if channel_id not in CHANNELS:
-            raise NocError(400, "bad_request", "output must be A or B")
+        channel_id = self._output_id(channel_id)
         if action not in {"recall", "clear"}:
             raise NocError(400, "bad_request", "effect action must be recall or clear")
         config = load_config(self.encoder_config)
@@ -1045,7 +1320,7 @@ def make_handler(agent: Agent):
             caller = self._caller_ip()
             allowed = ip_allowed(caller, agent.allow)
             presented = bearer_token(self.headers.get("Authorization"))
-            matched = tokens_match(presented or "", agent.token)
+            matched = agent.token_matches(presented or "")
             if not allowed:
                 log.warning("noc auth failed caller=%s reason=ip_denied", caller)
                 self._json(403, {"ok": False, "error": "forbidden", "detail": "caller address is not allowed"})
@@ -1100,6 +1375,19 @@ def make_handler(agent: Agent):
                 and parts[3] in {"recall", "clear"}
             ):
                 return "POST"
+            if (
+                len(parts) == 4
+                and parts[0] == "outputs"
+                and parts[2] == "effects"
+            ):
+                return "GET"
+            if (
+                len(parts) == 5
+                and parts[0] == "outputs"
+                and parts[2] == "effects"
+                and parts[3] == "recall"
+            ):
+                return "POST"
             return None
 
         def _dispatch(self, method: str) -> None:
@@ -1141,12 +1429,21 @@ def make_handler(agent: Agent):
                     if not isinstance(action, str):
                         raise NocError(400, "bad_request", "action must be start, stop, or restart")
                     self._finish_control(agent.control(action, body.get("outputs", "all"), caller))
+                elif len(tail) == 5 and tail[0] == "outputs" and tail[2] == "effects" and tail[3] == "recall":
+                    self._json(200, agent.effect_recall_path(tail[1], tail[4], caller))
+                elif (
+                    len(tail) == 4
+                    and tail[0] == "outputs"
+                    and tail[2] == "effects"
+                    and tail[3] not in {"recall", "clear"}
+                ):
+                    self._json(200, agent.effect_on_air(tail[1], tail[3]))
                 elif len(tail) == 4 and tail[2] == "effects":
-                    self._json(200, agent.effect_command(unquote(tail[1]), tail[3], self._body(), caller))
+                    self._json(200, agent.effect_command(tail[1], tail[3], self._body(), caller))
                 elif len(tail) == 2:
                     self._finish_control(agent.control(tail[1], "all", caller))
                 else:
-                    self._finish_control(agent.control(tail[2], tail[1], caller))
+                    self._finish_control(agent.control(tail[2], unquote(tail[1]).upper(), caller))
             except NocError as exc:
                 self._json(exc.status, {"ok": False, "error": exc.error, "detail": exc.detail})
             except Exception:
@@ -1229,6 +1526,7 @@ def main(argv: list[str] | None = None) -> int:
         Path(str(noc["encoder_config"])),
         Path(str(noc["state_dir"])),
         Path(str(noc["hls_root"])),
+        token_path=token_path,
     )
     tls = None
     if noc["tls_cert"] or noc["tls_key"]:

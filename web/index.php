@@ -115,6 +115,8 @@ header('X-Content-Type-Options: nosniff');
               <option value="720p59.94">720p 59.94</option>
               <option value="720p50">720p 50</option>
             </select>
+            <label for="bitrate-A">Video bitrate (Mbps)</label>
+            <input id="bitrate-A" data-channel="A" data-key="bitrate" type="number" min="6" max="18" step="1" inputmode="numeric">
             <p class="save-row">
               <button type="button" class="btn-text" id="auto-A">Auto</button>
               <span class="muted" id="auto-note-A"></span>
@@ -143,33 +145,11 @@ header('X-Content-Type-Options: nosniff');
               <h2 id="output-dialog-title-A">Output A</h2>
               <button type="button" class="btn-text" data-close-dialog>Close</button>
             </div>
-            <div class="grid-2">
-              <div>
-                <label for="mode-A">Delivery</label>
-                <select id="mode-A" data-output-field data-channel="A" data-key="mode">
-                  <option value="srt-caller">SRT caller</option>
-                  <option value="srt-listener">SRT listener</option>
-                  <option value="hls-push">HLS push</option>
-                  <option value="hls-pull">HLS pull</option>
-                </select>
-              </div>
-              <div>
-                <label for="bitrate-A">Video bitrate (Mbps)</label>
-                <input id="bitrate-A" data-output-field data-channel="A" data-key="bitrate" type="number" min="6" max="18" step="1" inputmode="numeric">
-              </div>
-            </div>
-            <div class="field-block" data-channel-fields="A" data-modes="srt-caller" hidden>
-              <label for="host-A">Listener address</label>
-              <input id="host-A" data-output-field data-channel="A" data-key="host" type="text" autocomplete="off" spellcheck="false" placeholder="srt.example.com">
-            </div>
-            <div class="field-block" data-channel-fields="A" data-modes="srt-caller srt-listener">
-              <label for="port-A">Port</label>
-              <input id="port-A" data-output-field data-channel="A" data-key="port" type="number" min="1" max="65535" step="1" inputmode="numeric">
-            </div>
-            <div class="field-block" data-channel-fields="A" data-modes="hls-push hls-pull" hidden>
-              <label for="url-A" data-url-label="A">URL</label>
-              <input id="url-A" data-output-field data-channel="A" data-key="url" type="url" autocomplete="off" spellcheck="false" placeholder="https://origin.example/live/a/index.m3u8">
-            </div>
+            <p class="muted">One encode for this input. Each output sends that same stream. Four is the limit.</p>
+            <div id="outputs-A" data-output-list="A"></div>
+            <p class="save-row">
+              <button type="button" class="secondary" data-add-output="A">Add output</button>
+            </p>
             <p class="save-row">
               <button type="button" class="btn-text" data-restart="A">Restart channel</button>
               <span class="muted" data-restart-note="A"></span>
@@ -241,6 +221,8 @@ header('X-Content-Type-Options: nosniff');
               <option value="720p59.94">720p 59.94</option>
               <option value="720p50">720p 50</option>
             </select>
+            <label for="bitrate-B">Video bitrate (Mbps)</label>
+            <input id="bitrate-B" data-channel="B" data-key="bitrate" type="number" min="6" max="18" step="1" inputmode="numeric">
             <p class="save-row">
               <button type="button" class="btn-text" id="auto-B">Auto</button>
               <span class="muted" id="auto-note-B"></span>
@@ -269,33 +251,11 @@ header('X-Content-Type-Options: nosniff');
               <h2 id="output-dialog-title-B">Output B</h2>
               <button type="button" class="btn-text" data-close-dialog>Close</button>
             </div>
-            <div class="grid-2">
-              <div>
-                <label for="mode-B">Delivery</label>
-                <select id="mode-B" data-output-field data-channel="B" data-key="mode">
-                  <option value="srt-caller">SRT caller</option>
-                  <option value="srt-listener">SRT listener</option>
-                  <option value="hls-push">HLS push</option>
-                  <option value="hls-pull">HLS pull</option>
-                </select>
-              </div>
-              <div>
-                <label for="bitrate-B">Video bitrate (Mbps)</label>
-                <input id="bitrate-B" data-output-field data-channel="B" data-key="bitrate" type="number" min="6" max="18" step="1" inputmode="numeric">
-              </div>
-            </div>
-            <div class="field-block" data-channel-fields="B" data-modes="srt-caller" hidden>
-              <label for="host-B">Listener address</label>
-              <input id="host-B" data-output-field data-channel="B" data-key="host" type="text" autocomplete="off" spellcheck="false" placeholder="srt.example.com">
-            </div>
-            <div class="field-block" data-channel-fields="B" data-modes="srt-caller srt-listener">
-              <label for="port-B">Port</label>
-              <input id="port-B" data-output-field data-channel="B" data-key="port" type="number" min="1" max="65535" step="1" inputmode="numeric">
-            </div>
-            <div class="field-block" data-channel-fields="B" data-modes="hls-push hls-pull" hidden>
-              <label for="url-B" data-url-label="B">URL</label>
-              <input id="url-B" data-output-field data-channel="B" data-key="url" type="url" autocomplete="off" spellcheck="false" placeholder="https://origin.example/live/b/index.m3u8">
-            </div>
+            <p class="muted">One encode for this input. Each output sends that same stream. Four is the limit.</p>
+            <div id="outputs-B" data-output-list="B"></div>
+            <p class="save-row">
+              <button type="button" class="secondary" data-add-output="B">Add output</button>
+            </p>
             <p class="save-row">
               <button type="button" class="btn-text" data-restart="B">Restart channel</button>
               <span class="muted" data-restart-note="B"></span>

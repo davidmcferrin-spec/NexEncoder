@@ -39,17 +39,39 @@ def test_normalize_keeps_legal_values_and_drops_the_rest():
     assert config["inputs"]["A"]["format"] == "720p50"
     assert config["inputs"]["A"]["device"] == "DeckLink Duo (1)"
     assert config["inputs"]["B"]["format"] == "1080i59.94"
-    assert config["outputs"]["A"]["bitrate"] == 8
-    assert config["outputs"]["A"]["mode"] == "hls-push"
-    assert config["outputs"]["A"]["url"] == ""
-    assert config["outputs"]["B"]["host"] == "origin.example"
-    assert config["outputs"]["B"]["bitrate"] == 18
-    assert config["outputs"]["B"]["port"] == 9001
+    assert config["inputs"]["A"]["bitrate"] == 8
+    assert config["outputs"]["A"][0]["mode"] == "hls-push"
+    assert config["outputs"]["A"][0]["url"] == ""
+    assert config["outputs"]["A"][0]["id"] == "1"
+    assert config["outputs"]["B"][0]["host"] == "origin.example"
+    assert config["inputs"]["B"]["bitrate"] == 18
+    assert config["outputs"]["B"][0]["port"] == 9001
     assert config["inputs"]["A"]["source"] == "sdi"
     listener = normalize_config({
         "outputs": {"B": {"mode": "srt-listener", "port": 9001}},
     })
-    assert listener["outputs"]["B"]["port"] == 9101
+    assert listener["outputs"]["B"][0]["port"] == 9101
+
+
+def test_each_input_keeps_up_to_four_destinations():
+    crowded = normalize_config({
+        "inputs": {"A": {"bitrate": 10}},
+        "outputs": {
+            "A": [{"bitrate": 18, "mode": "hls-pull", "url": f"https://origin.example/{i}"} for i in range(5)],
+            "B": [
+                {"mode": "srt-listener", "port": 9101},
+                {"id": "2", "mode": "srt-listener", "port": 9101},
+            ],
+        },
+    })
+    assert crowded["inputs"]["A"]["bitrate"] == 10
+    assert len(crowded["outputs"]["A"]) == 4
+    assert [item["id"] for item in crowded["outputs"]["A"]] == ["1", "2", "3", "4"]
+    assert crowded["outputs"]["B"][0]["port"] == 9101
+    assert crowded["outputs"]["B"][1]["port"] == 9200
+    text = render_metrics(snapshot_for(crowded, {"A": {"running": True, "bitrate_bps": 8_000_000}}))
+    assert text.count("nexencoder_output_video_bitrate_bps{") == 1
+    assert 'destination="1"' in text and 'destination="4"' in text
 
 
 def test_snapshot_omits_resolution_until_the_input_locks():

@@ -17,14 +17,20 @@ ignored. A `token`, `access_token`, or `password` query parameter is rejected wi
 Each encoder has two outputs, `A` and `B`. Each output is one systemd service on the
 shared CPU. There is no far-end trunk. Delivery is toward a CDN.
 
+Each of those outputs encodes once and can publish up to four destinations. `transport`
+is destination `1`, which is what a v1 client already reads. `destinations` lists every
+one, including `1`, with the same transport fields plus `id`, `connected`, and
+`connected_evidence`. `connected` on the output follows destination `1`. Later HLS pull
+playlists are `hls/<channel>/<id>/index.m3u8`. Destination `1` stays at `hls/<channel>/`.
+
 | Stage | Output A and B |
 |---|---|
 | Capture, SDI | FFmpeg DeckLink (`yuv422p10`), one process per output |
 | Capture, SRT input | FFmpeg lavfi clock. A second FFmpeg process listens for the caller. The listener is not the CDN output. |
 | Encode | FFmpeg `libx264` (high profile) and AAC 192 kbit/s stereo 48 kHz |
 | SCTE-35 | TSDuck `tsp` `spliceinject` |
-| SRT egress | TSDuck `tsp -O srt` (caller or listener, 1500 ms latency). Not FFmpeg. Not GStreamer. |
-| HLS egress | FFmpeg `-f hls` copy. Push is HTTP PUT. Pull writes `/var/lib/nexencoder/hls/<id>/index.m3u8` with 2 second segments. |
+| SRT egress | TSDuck `tsp -O srt`, one process per destination (caller or listener, 1500 ms latency). Not FFmpeg. Not GStreamer. |
+| HLS egress | FFmpeg `-f hls` copy, one process per destination. Push is HTTP PUT. The first pull writes `/var/lib/nexencoder/hls/<id>/index.m3u8`. Further pulls write `/var/lib/nexencoder/hls/<id>/<destination>/index.m3u8`. Segments are 2 seconds. |
 | Preview | A separate ffmpeg decodes the program feed and publishes RTSP to MediaMTX at `rtsp://127.0.0.1:8554/inputA` (and `inputB`). WHEP is on port 8889. Restarting that proxy does not restart the channel. |
 
 GStreamer is installed for HTML CG and NDI layers. It is not on the program encode or
@@ -49,12 +55,18 @@ Every `/api/noc/v1` route, including health, requires:
 Authorization: Bearer <token>
 ```
 
-The token is the first non-empty, non-comment line of the token file. The default
-path is `/etc/nexencoder/noc.token`, outside the web tree and outside `web/`. The
-compare hashes both strings with SHA-256 and then uses `hmac.compare_digest`, so a
-wrong token of a different length does not return early. An empty token does not
-match. The process refuses to start (exit 78, which systemd does not restart) unless
-the token is 16 to 256 characters from `[A-Za-z0-9._~+/-]`.
+The token file holds one or more bearer tokens. A file that is still a single
+non-empty, non-comment line is one active token. The Services page writes one
+JSON object per line, with a label, `active` or `revoked`, and the secret. The
+agent reads that file on every request, so creating, revoking, or deleting a
+token does not need a restart. A revoked token does not authenticate. When the
+file exists it is the only source, including when every token in it is revoked.
+The default path is `/etc/nexencoder/noc.token`, outside the web tree and outside
+`web/`. The compare hashes both strings with SHA-256 and then uses
+`hmac.compare_digest` against every active token, so a wrong token of a different
+length does not return early. An empty token does not match. The process refuses
+to start (exit 78, which systemd does not restart) unless at least one active
+token is 16 to 256 characters from `[A-Za-z0-9._~+/-]`.
 
 `allow` in the config is an optional list of IP addresses and CIDR blocks. An empty
 list allows every source address; the token is still required. A source that is not
@@ -123,21 +135,37 @@ on an already-active unit is success.
 Stored effects use the same recall and normalize path as the Effects page. They do
 not restart the channel. The bearer token stays in the `Authorization` header.
 Bitfocus Companion and the Stream Deck API Request action can send that header.
+The Effects page help button lists these URLs for the presets on that page. It
+does not include a token.
+
+A preset name becomes a slug for the path: lowercase, runs of spaces and other
+separators become one underscore, a hyphen stays, and a slash becomes an
+underscore. `Lower Third` is `lower_third`. `Side-bar` is `side-bar`. The stored
+name on the Effects page stays `Lower Third`. Channel letters in these effect
+paths may be `a` or `A`. Start, stop, and restart accept `a` and `A` as well.
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/noc/v1/effects` | Every stored preset, plus a name that is still on air after its store was deleted. |
-| GET | `/api/noc/v1/effects/Bug` | One preset. `exists` and `valid` are true when the store loads. `active` lists outputs whose live preset is this name. A missing name is 200 with both flags false. |
-| POST | `/api/noc/v1/outputs/A/effects/recall` | Body `{"preset":"Bug"}`. Also `B`. |
-| POST | `/api/noc/v1/outputs/A/effects/clear` | Normalize that output. The body may be empty. |
+| GET | `/api/noc/v1/effects/lower_third` | One preset, matched by slug. `exists` and `valid` are true when the store loads. `active` lists outputs whose live preset has this slug. A missing name is 200 with both flags false. |
+| GET | `/api/noc/v1/outputs/a/effects/lower_third` | That output only. `active` is a boolean. Also `b`. |
+| POST | `/api/noc/v1/outputs/a/effects/recall/lower_third` | Recall that preset. The body may be empty. Also `b`. |
+| POST | `/api/noc/v1/outputs/A/effects/recall` | Same recall with body `{"preset":"Lower Third"}`. The path form above is the one shown in the help. |
+| POST | `/api/noc/v1/outputs/a/effects/clear` | Normalize that output. The body may be empty. |
 
-`warning` is set when the preset uses an HTML layer and no renderer is installed, or an
-NDI layer and `ndisrc` is missing. The recall still applies; that layer stays transparent.
-`valid` stays true. Percent-encode a preset name that contains a space on the GET path.
-A slash in the name is rejected.
+If two stored presets produce the same slug, recall and the status routes return
+400 `preset slug is not unique`. `warning` is set when the preset uses an HTML
+layer and no renderer is installed, or an NDI layer and `ndisrc` is missing. The
+recall still applies; that layer stays transparent. `valid` stays true.
 
 ```json
-{"ok": true, "name": "Bug", "exists": true, "valid": true, "active": ["A"], "format": "1080i59.94", "warning": ""}
+{"ok": true, "name": "Lower Third", "slug": "lower_third", "exists": true, "valid": true, "active": ["A"], "format": "1080i59.94", "warning": ""}
+```
+
+On one output the same preset looks like this:
+
+```json
+{"ok": true, "channel": "A", "name": "Lower Third", "slug": "lower_third", "exists": true, "valid": true, "active": true, "warning": ""}
 ```
 
 Every control attempt is logged at info with the caller address, the action, the
@@ -609,7 +637,8 @@ be read without root; a missing group is skipped and GPU fields stay empty. It
 writes `/etc/nexencoder/noc.json` only when that file is absent. It generates
 `/etc/nexencoder/noc.token` only when that file is absent or empty, mode 640, owner
 `root`, group `nexencoder`. A re-run does not rotate a token that is already there.
-A re-run also refreshes `nexencoder-channel@.service`, which sets `UMask=0022` so
+The Services page can add, revoke, and delete tokens in that file. The agent reads
+it on each request. A re-run also refreshes `nexencoder-channel@.service`, which sets `UMask=0022` so
 progress and SRT stats stay mode 644 and this user can read them. The channel
 journal redacts URL userinfo passwords and query secrets before it logs an argv
 or a tsp stderr line.
@@ -649,13 +678,15 @@ sudo systemctl enable --now nexencoder-noc
 Edit `/etc/nexencoder/noc.json` and set `encoder_id`, `site`, `location`, and `allow`
 to the NexNOC hosts. Restart the agent after that edit.
 
-Rotate the token without printing it into a log:
+Rotate or add a token on the Services page. The secret is shown once and is not
+written to the audit log. The agent reads the file on the next request, so
+`nexencoder-noc` does not need a restart. A file that is still one bare token
+line remains a single active token. Replacing that file by hand:
 
 ```
 python3 -c 'import secrets; print(secrets.token_hex(32))' | sudo tee /etc/nexencoder/noc.token >/dev/null
 sudo chown root:nexencoder /etc/nexencoder/noc.token
 sudo chmod 0640 /etc/nexencoder/noc.token
-sudo systemctl restart nexencoder-noc
 ```
 
 Give the new value to NexNOC out of band. A world-readable token file logs a warning

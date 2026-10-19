@@ -126,7 +126,9 @@ def test_config_preview_and_scte_injection(tmp_path):
         )
         with urlopen(request, timeout=3) as response:
             saved = json.loads(response.read().decode("utf-8"))
-        assert saved["config"]["outputs"]["A"]["bitrate"] == 12
+        assert saved["config"]["inputs"]["A"]["bitrate"] == 12
+        assert saved["config"]["outputs"]["A"][0]["mode"] == "srt-listener"
+        assert "bitrate" not in saved["config"]["outputs"]["A"][0]
         status, listing = _get(port, "/api/devices")
         assert status == 200 and "DeckLink Duo (1)" in listing
         status, preview = _get(port, "/api/preview")
@@ -425,6 +427,32 @@ def test_bars_toggle_does_not_rewrite_the_channel_config(tmp_path):
         assert turned_off["enabled"] is False
     finally:
         httpd.shutdown()
+
+
+def test_tokens_are_created_revoked_and_kept_out_of_the_audit(tmp_path):
+    legacy = "legacy-token-0123456789abcd"
+    path = tmp_path / "noc.token"
+    path.write_text(legacy + "\n", encoding="utf-8")
+    httpd, port = _start(Console(state_dir=tmp_path, token_path=path))
+    try:
+        status, body = _get(port, "/api/tokens")
+        listed = json.loads(body)
+        assert status == 200 and listed["tokens"][0]["label"] == "NexNOC"
+        assert listed["tokens"][0]["last4"] == "abcd"
+        assert legacy not in body
+        created = _post(port, "/api/tokens", {"action": "create", "label": "Companion"})
+        secret = created["token"]["secret"]
+        assert len(secret) >= 16 and secret not in json.dumps(created["tokens"])
+        revoked = _post(port, "/api/tokens", {"action": "revoke", "id": "legacy"})
+        assert any(item["id"] == "legacy" and item["state"] == "revoked" for item in revoked["tokens"])
+        deleted = _post(port, "/api/tokens", {"action": "delete", "id": created["token"]["id"]})
+        assert all(item["id"] != created["token"]["id"] for item in deleted["tokens"])
+    finally:
+        httpd.shutdown()
+    audit = (tmp_path / "audit.log").read_text(encoding="utf-8")
+    assert "token.create" in audit and "token.revoke" in audit and "token.delete" in audit
+    assert secret not in audit and legacy not in audit
+    assert "Companion" in audit
 
 
 def _post(port: int, path: str, payload: dict) -> dict:

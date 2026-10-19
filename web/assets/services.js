@@ -259,4 +259,116 @@
   load();
   follow(selected);
   setInterval(load, 2000);
+  loadTokens();
+
+  var shownSecret = "";
+
+  function tokenNote(ok, text) {
+    var error = $("token-error");
+    if (!error) return;
+    error.hidden = ok || !text;
+    error.textContent = ok ? "" : text;
+  }
+
+  function tokenRequest(body) {
+    var options = { headers: { "Accept": "application/json" } };
+    if (body) {
+      options.method = "POST";
+      options.headers["Content-Type"] = "application/json";
+      options.headers["X-Requested-With"] = "NexEncoder";
+      options.body = JSON.stringify(body);
+    }
+    return fetch("/admin/tokens.php", options).then(function (response) {
+      return response.json().then(function (payload) {
+        if (!response.ok || !payload.ok) throw new Error(payload.detail || "Token request failed");
+        return payload;
+      });
+    });
+  }
+
+  function renderTokens(tokens) {
+    var list = $("token-list");
+    if (!list) return;
+    list.textContent = "";
+    (tokens || []).forEach(function (token) {
+      var item = document.createElement("li");
+      var text = document.createElement("span");
+      var when = token.created ? new Date(token.created * 1000).toLocaleString() : "existing";
+      text.textContent = token.label + " · " + token.state + " · " + when + " · " + token.last4;
+      var actions = document.createElement("span");
+      actions.className = "preset-actions";
+      if (token.state === "active") {
+        var revoke = document.createElement("button");
+        revoke.type = "button";
+        revoke.className = "secondary";
+        revoke.textContent = "Revoke";
+        revoke.addEventListener("click", function () {
+          if (!window.confirm("Revoke token " + token.label + "? Callers using it will be refused.")) return;
+          tokenRequest({ action: "revoke", id: token.id }).then(function (body) {
+            renderTokens(body.tokens);
+            tokenNote(true, "");
+          }).catch(function (err) { tokenNote(false, err.message); });
+        });
+        actions.appendChild(revoke);
+      }
+      var remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "btn-text";
+      remove.textContent = "Delete";
+      remove.addEventListener("click", function () {
+        if (!window.confirm("Delete token " + token.label + "?")) return;
+        tokenRequest({ action: "delete", id: token.id }).then(function (body) {
+          renderTokens(body.tokens);
+          tokenNote(true, "");
+        }).catch(function (err) { tokenNote(false, err.message); });
+      });
+      actions.appendChild(remove);
+      item.appendChild(text);
+      item.appendChild(actions);
+      list.appendChild(item);
+    });
+  }
+
+  function loadTokens() {
+    tokenRequest(null).then(function (body) {
+      renderTokens(body.tokens);
+    }).catch(function (err) { tokenNote(false, err.message); });
+  }
+
+  function showSecret(secret) {
+    shownSecret = secret;
+    var once = $("token-once");
+    var line = $("token-secret");
+    line.textContent = "Copy this token now. It is shown once: " + secret;
+    once.hidden = false;
+  }
+
+  var tokenForm = $("token-form");
+  if (tokenForm) {
+    tokenForm.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var label = $("token-label").value.trim();
+      tokenRequest({ action: "create", label: label }).then(function (body) {
+        $("token-label").value = "";
+        showSecret(body.token.secret || "");
+        renderTokens(body.tokens);
+        tokenNote(true, "");
+      }).catch(function (err) { tokenNote(false, err.message); });
+    });
+  }
+  var copyToken = $("token-copy");
+  if (copyToken) {
+    copyToken.addEventListener("click", function () {
+      if (!shownSecret || !navigator.clipboard || !navigator.clipboard.writeText) return;
+      navigator.clipboard.writeText(shownSecret).catch(function () {});
+    });
+  }
+  var hideToken = $("token-hide");
+  if (hideToken) {
+    hideToken.addEventListener("click", function () {
+      shownSecret = "";
+      $("token-secret").textContent = "";
+      $("token-once").hidden = true;
+    });
+  }
 })();

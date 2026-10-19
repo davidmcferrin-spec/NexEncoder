@@ -3,7 +3,7 @@
 ## Purpose
 Two inputs, each SDI or an SRT listener (1080i / 1080p / 720p), on a Blackmagic DeckLink Duo or Duo 2,
 hosted in a Dell R415/R430/R440/R450 (R440 is the realistic minimum). Each input is
-encoded to H.264/AAC and delivered as SRT (caller or listener) or HLS (push or pull).
+encoded to H.264/AAC and delivered as up to four SRT (caller or listener) or HLS (push or pull) outputs.
 CEA-608/708 captions and SCTE-104 are carried through (708 as A/53 SEI, 104 translated
 to SCTE-35) and shown on a low-latency WebRTC proxy preview via MediaMTX.
 
@@ -19,12 +19,15 @@ to SCTE-35) and shown on a low-latency WebRTC proxy preview via MediaMTX.
  `setup.sh` patches that demuxer to UDP the CEA-708 CDP and SCTE-104 user data to the channel
  supervisor. `nexencoder.vanc` scans those bytes; SCTE-104 is translated and sent to spliceinject.
 - Encode/mux: FFmpeg libx264 (6–18 Mbps) and AAC, TSDuck `spliceinject` for SCTE-35, then
-  `tsp` SRT or FFmpeg HLS. GStreamer is installed for the host; the live path is ffmpeg | tsp.
-- Control plane: Apache and PHP serve the operator pages on port 80 (no login). `python3 -m nexencoder.console` is the live feed on `127.0.0.1:8788`. PHP calls that feed. Admin saves are PHP scripts. `python3 -m nexencoder.noc` is a separate bearer-token API for NexNOC (`/api/noc/v1`, contract in `docs/NOC-AGENT-API.md`). That API recalls or clears a stored effect and reports whether it is on air. The Effects page can delete a stored preset. Caption and splice
+ `tsp` SRT or FFmpeg HLS. One encode per input. Up to four destinations read that program feed;
+ a dead destination restarts on its own. GStreamer is installed for the host; the live path is ffmpeg | tsp.
+- Control plane: Apache and PHP serve the operator pages on port 80 (no login). `python3 -m nexencoder.console` is the live feed on `127.0.0.1:8788`. PHP calls that feed. Admin saves are PHP scripts. `python3 -m nexencoder.noc` is a separate bearer-token API for NexNOC (`/api/noc/v1`, contract in `docs/NOC-AGENT-API.md`). That API recalls or clears a stored effect by a lowercase slug in the URL and reports whether it is on air. Services creates, revokes, and deletes the bearer tokens. The Effects page can delete a stored preset. Caption and splice
   notes are posted to `/api/sideband` and the dashboard polls them. Config is saved through
   PHP and applied by restarting `nexencoder-channel@A` / `@B`. The dashboard can restart that unit. Input and output settings open from that page. `inputs.php`, `outputs.php`, and `monitor.php` redirect there. The Services page can copy the visible journal. Its support-bundle bar, separate from the unit list, downloads one redacted zip of every encoder service plus host details such as lsmod and dmesg, for 24, 36, 48, or 72 hours, or the whole journal. The NOC token is not included. Clear log on the selected unit hides older lines in that journal view. Clear All on that bar rotates and vacuums the host journal without downloading a zip. Services keep running. Operator actions are appended to the state directory audit log, that file is included in the support zip, and Clear All does not erase it. Effect recall, normalize,
   and bars-with-ident do not restart the channel. Input A is DeckLink Duo (1) or SRT
-  listener port 9001; input B is DeckLink Duo (2) or port 9002. Output B listens on 9101.
+  listener port 9001; input B is DeckLink Duo (2) or port 9002. Output B's first listener is 9101.
+  The Output dialog can add destinations, four per input, each SRT caller or listener or HLS push or pull.
+  Bitrate is the encode, shared by those destinations. The first HLS pull stays at `hls/<channel>/`.
   Auto, in each input's settings, reads the locked SDI mode from `decklink-status`, or the SRT caller's stream banner, and saves that raster.
   Layer −5 is the waiting picture. Layer +5 is bars plus an ident. A tone replaces audio
   while bars are the picture. Preset corners are fractions of the frame.

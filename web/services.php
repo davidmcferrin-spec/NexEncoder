@@ -62,6 +62,24 @@ header('X-Content-Type-Options: nosniff');
       <button type="button" class="btn btn-danger" id="clear-all" title="Delete the host journal for every service">Clear All</button>
       <span id="bundle-status" class="muted"></span>
     </div>
+    <section class="panel" id="token-panel">
+      <h2>API tokens</h2>
+      <p class="muted">Bearer tokens for the effect and encoder API on port 8790. A new token is shown once. Revoke stops it. Delete removes the row. The secret is not written to the audit log.</p>
+      <form id="token-form" class="token-form">
+        <label for="token-label">Label</label>
+        <input id="token-label" maxlength="40" autocomplete="off" spellcheck="false" required>
+        <button type="submit" id="token-create">Create token</button>
+      </form>
+      <div id="token-once" hidden>
+        <p class="ok" id="token-secret"></p>
+        <p class="save-row">
+          <button type="button" id="token-copy">Copy token</button>
+          <button type="button" class="secondary" id="token-hide">Hide token</button>
+        </p>
+      </div>
+      <p class="error" id="token-error" role="alert" hidden></p>
+      <ul class="preset-list" id="token-list"></ul>
+    </section>
     <div class="banner" id="svc-banner" hidden></div>
     <div class="ops-layout">
       <section class="panel">

@@ -36,6 +36,7 @@ from .effects import (
 from .livefeed import check_loop_file
 from .errors import ParseError
 from .metrics import CATALOG, render_metrics
+from .noc import create_api_token, delete_api_token, list_api_tokens, revoke_api_token
 from .pipeline import SPLICE_PORT, preview_path, sections_from_mom, whep_url
 from .prom import PrometheusError, fetch
 from .services import (
@@ -71,6 +72,7 @@ class Console:
         html_backend=None,
         format_probe=None,
         decklink=None,
+        token_path: Path | None = None,
     ) -> None:
         repo = Path(__file__).resolve().parents[1]
         self.prometheus_url = prometheus_url
@@ -88,6 +90,7 @@ class Console:
         self.html_backend = html_backend or detect_html_backend
         self.format_probe = format_probe
         self.decklink = decklink if decklink is not None else DeckLinkWatch()
+        self.token_path = token_path or Path("/etc/nexencoder/noc.token")
 
     def metrics_text(self) -> str:
         config = load_config(self.config_path)
@@ -155,6 +158,8 @@ def make_handler(console: Console):
                 elif path.startswith("/api/channels/") and path.endswith("/still"):
                     channel = unquote(path[len("/api/channels/"):-len("/still")].strip("/"))
                     self._still(channel)
+                elif path == "/api/tokens":
+                    self._tokens(None)
                 elif path == "/api/services":
                     self._json(200, list_units(console.unit_runner))
                 elif path == "/api/support":
@@ -208,6 +213,8 @@ def make_handler(console: Console):
                     self._bars(unquote(parts[2]), body)
                 elif len(parts) == 4 and parts[0] == "api" and parts[1] == "channels" and parts[3] == "detect":
                     self._detect(unquote(parts[2]))
+                elif parts == ["api", "tokens"]:
+                    self._tokens(body)
                 elif parts == ["api", "journal", "clear"]:
                     self._journal_clear()
                 else:
@@ -497,6 +504,38 @@ def make_handler(console: Console):
             self.wfile.write(b"\n")
             self.wfile.flush()
 
+        def _tokens(self, body: bytes | None) -> None:
+            path = console.token_path
+            try:
+                if body is None:
+                    self._json(200, {"ok": True, "tokens": list_api_tokens(path)})
+                    return
+                raw = json.loads(body.decode("utf-8") or "{}")
+                if not isinstance(raw, dict):
+                    raise ValueError("body must be a JSON object")
+                action = raw.get("action")
+                if action == "create":
+                    created = create_api_token(path, str(raw.get("label") or ""))
+                    try_record(console.state_dir, "token.create", {"id": created["id"], "label": created["label"]})
+                    self._json(200, {"ok": True, "token": created, "tokens": list_api_tokens(path)})
+                    return
+                token_id = raw.get("id")
+                if not isinstance(token_id, str) or not token_id.strip():
+                    raise ValueError("id is required")
+                token_id = token_id.strip()
+                label = next((item["label"] for item in list_api_tokens(path) if item["id"] == token_id), "")
+                if action == "revoke":
+                    revoke_api_token(path, token_id)
+                    try_record(console.state_dir, "token.revoke", {"id": token_id, "label": label})
+                elif action == "delete":
+                    delete_api_token(path, token_id)
+                    try_record(console.state_dir, "token.delete", {"id": token_id, "label": label})
+                else:
+                    raise ValueError("action must be create, revoke, or delete")
+                self._json(200, {"ok": True, "tokens": list_api_tokens(path)})
+            except OSError:
+                self._json(503, {"ok": False, "detail": "The token file is not writable."})
+
         def _json(self, status: int, payload: dict) -> None:
             self._bytes(status, "application/json; charset=utf-8", json.dumps(payload).encode("utf-8"))
 
@@ -537,8 +576,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--prometheus", default="http://127.0.0.1:9090")
     parser.add_argument("--config", type=Path, default=repo / "var" / "config.json")
     parser.add_argument("--state", type=Path, default=repo / "var" / "state")
+    parser.add_argument("--token-file", type=Path, default=Path("/etc/nexencoder/noc.token"))
     args = parser.parse_args(argv)
-    console = Console(args.prometheus, config_path=args.config, state_dir=args.state)
+    console = Console(
+        args.prometheus,
+        config_path=args.config,
+        state_dir=args.state,
+        token_path=args.token_file,
+    )
     console.decklink.start()
     httpd = serve(console, args.host, args.port)
     log.info("live feed on http://%s:%s", args.host, args.port)

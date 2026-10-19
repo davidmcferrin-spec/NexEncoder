@@ -12,8 +12,8 @@ def test_idle_snapshot_omits_unmeasured_series():
     assert "nexencoder_up 1" in text
     assert 'nexencoder_input_up{input="A"} 0' in text
     assert 'nexencoder_input_up{input="B"} 0' in text
-    assert 'nexencoder_output_connected{output="A"} 0' in text
-    assert 'nexencoder_output_info{output="A",mode="srt-listener"} 1' in text
+    assert 'nexencoder_output_connected{output="A",destination="1"} 0' in text
+    assert 'nexencoder_output_info{output="A",destination="1",mode="srt-listener"} 1' in text
     assert _samples(text, "nexencoder_output_video_bitrate_bps") == []
     assert _samples(text, "nexencoder_input_width") == []
     assert _samples(text, "nexencoder_output_rtt_seconds") == []
@@ -35,6 +35,6 @@ def test_measured_values_and_label_escaping():
     assert 'nexencoder_input_width{input="A"} 1920' in text
     assert 'nexencoder_input_field_rate_hz{input="A"} 59.94' in text
     assert 'nexencoder_output_video_bitrate_bps{output="A"} 8000000' in text
-    assert 'nexencoder_output_rtt_seconds{output="A"} 0.025' in text
-    assert 'nexencoder_output_packets_lost_total{output="A"} 2' in text
+    assert 'nexencoder_output_rtt_seconds{output="A",destination="1"} 0.025' in text
+    assert 'nexencoder_output_packets_lost_total{output="A",destination="1"} 2' in text
     assert 'nexencoder_input_scte104_messages_total{input="A"} 3' in text
