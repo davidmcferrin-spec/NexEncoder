@@ -1230,8 +1230,9 @@ static int config_input(AVFilterLink *inlink)
     s->self = ctx;
     s->width = inlink->w;
     s->height = inlink->h;
-    s->rate_num = inlink->frame_rate.num;
-    s->rate_den = inlink->frame_rate.den;
+    /* FFmpeg 9 keeps the frame rate on FilterLink, not AVFilterLink. */
+    s->rate_num = ff_filter_link(inlink)->frame_rate.num;
+    s->rate_den = ff_filter_link(inlink)->frame_rate.den;
     if (s->rate_num <= 0 || s->rate_den <= 0) {
         s->rate_num = 30;
         s->rate_den = 1;
