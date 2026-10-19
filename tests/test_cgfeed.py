@@ -5,9 +5,12 @@ import json
 import logging
 import struct
 import threading
+import time
 import zlib
 
 from nexencoder.cgfeed import (
+    PngPipe,
+    png_decoder_argv,
     SlotWriter,
     _Running,
     _attach_page,
@@ -385,6 +388,7 @@ def test_filter_patch_registers_nexeffect_and_copies_side_data(tmp_path):
     assert MARKER in source
     assert "av_frame_copy_props" in source
     assert "squeeze_fields" in source
+    assert "#define NX_SLOTS 2" in source
     makefile = patch_makefile("OBJS-$(CONFIG_COPY_FILTER) += vf_copy.o\n")
     assert "CONFIG_NEXEFFECT_FILTER" in makefile
     assert patch_makefile(makefile) == makefile
@@ -405,3 +409,73 @@ def test_filter_patch_registers_nexeffect_and_copies_side_data(tmp_path):
     tone = (tmp_path / "libavfilter" / "af_nextone.c").read_text(encoding="utf-8")
     assert "nexencoder tone" in tone
     assert "WAITING FOR INPUT" in (tmp_path / "libavfilter" / "vf_nexeffect.c").read_text(encoding="utf-8")
+
+
+def test_png_decoder_is_ffmpeg_not_python_and_keeps_alpha():
+    argv = png_decoder_argv()
+    assert argv[0] == "ffmpeg"
+    assert argv[argv.index("-pix_fmt") + 1] == "bgra"
+    assert argv[argv.index("-fps_mode") + 1] == "passthrough"
+    assert argv[argv.index("-f") + 1] == "png_pipe"
+
+
+class _FakeDecoder:
+    def __init__(self, frames: list[bytes]) -> None:
+        self.stdin = io.BytesIO()
+        self.stdout = io.BytesIO(b"".join(frames))
+        self.stderr = io.BytesIO()
+        self.returncode = None
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.returncode = 0
+
+    def wait(self, timeout=None):
+        return 0
+
+    def kill(self):
+        self.returncode = -9
+
+
+def test_png_pipe_writes_each_decoded_frame_to_the_slot(tmp_path):
+    first = bytes([1, 2, 3, 255]) * 4
+    second = bytes([9, 8, 7, 128]) * 4
+    writer = SlotWriter(tmp_path / "A-0.bgra", 2, 2)
+    fake = _FakeDecoder([first, second])
+    pipe = PngPipe(writer, threading.Event(), spawn=lambda *a, **k: fake)
+    pipe.thread.join(timeout=2)
+    assert pipe.frames == 2
+    assert read_slot(writer.path, 2, 2) == second
+    pipe.feed(b"png-bytes")
+    assert fake.stdin.getvalue() == b"png-bytes"
+    pipe.close()
+
+
+def test_png_pipe_reports_a_dead_decoder(tmp_path):
+    writer = SlotWriter(tmp_path / "A-0.bgra", 2, 2)
+    fake = _FakeDecoder([])
+    pipe = PngPipe(writer, threading.Event(), spawn=lambda *a, **k: fake)
+    fake.returncode = 1
+    try:
+        pipe.feed(b"x")
+    except OSError as exc:
+        assert "exited with status 1" in str(exc)
+    else:
+        raise AssertionError("feed should fail once the decoder is gone")
+
+
+def test_attach_does_not_spend_the_whole_page_wait_on_a_tab_that_never_comes(monkeypatch):
+    monkeypatch.setattr("nexencoder.cgfeed.PAGE_GRACE", 0.3)
+    call, calls = _browser({
+        "Target.getTargets": {"targetInfos": []},
+        "Target.createTarget": {"targetId": "fresh"},
+        "Target.attachToTarget": {"sessionId": "s3"},
+        "Page.enable": {},
+        "Inspector.enable": {},
+    })
+    started = time.monotonic()
+    assert _attach_page(call, _Running(), "http://127.0.0.1/cg/bug.html", wait=30) == ("s3", "")
+    assert time.monotonic() - started < 3
+    assert "Target.createTarget" in calls

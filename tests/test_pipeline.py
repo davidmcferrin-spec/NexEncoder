@@ -106,7 +106,7 @@ def test_preview_decodes_the_program_feed():
     assert argv[argv.index("-pkt_size") + 1] == "1316"
     assert "libopus" in argv
     assert "yadif=" in argv[argv.index("-vf") + 1]
-    assert argv[argv.index("-analyzeduration") + 1] == "500000"
+    assert argv[argv.index("-analyzeduration") + 1] == "1000000"
     piped = preview_argv("A", source="pipe:0")
     assert piped[piped.index("-i") + 1] == "pipe:0"
     other = preview_argv("B")

@@ -29,6 +29,7 @@
     return [[0, 0], [size[0], 0], [0, size[1]], [size[0], size[1]]];
   }
 
+  var LAYER_SLOTS = 2;
   var LEVELS = [-4, -3, -2, -1, 1, 2, 3, 4];
 
   function levelLabel(level) {
@@ -36,9 +37,9 @@
   }
 
   function emptyLayers() {
-    var defaults = [1, 2, -1, -2];
+    var defaults = [1, 2];
     var rows = [];
-    for (var i = 0; i < 4; i++) {
+    for (var i = 0; i < LAYER_SLOTS; i++) {
       rows.push({
         enabled: i === 0,
         level: defaults[i],
@@ -176,9 +177,35 @@
     return parsed.href;
   }
 
+  function sizeToRaster(node) {
+    var size = raster();
+    node.style.width = size[0] + "px";
+    node.style.height = size[1] + "px";
+  }
+
+  function fitStage() {
+    var stage = document.getElementById("stage");
+    var inner = document.getElementById("stage-scale");
+    if (!stage || !inner) return;
+    var size = raster();
+    var width = stage.clientWidth;
+    var height = stage.clientHeight;
+    if (!width || !height) return;
+    var scale = Math.min(width / size[0], height / size[1]);
+    var offsetX = (width - size[0] * scale) / 2;
+    var offsetY = (height - size[1] * scale) / 2;
+    inner.style.width = size[0] + "px";
+    inner.style.height = size[1] + "px";
+    inner.style.transform = "translate(" + offsetX + "px, " + offsetY + "px) scale(" + scale + ")";
+    sizeToRaster(document.getElementById("behind-layers"));
+    sizeToRaster(document.getElementById("front-layers"));
+    sizeToRaster(document.getElementById("squeeze"));
+  }
+
   function paintLayers() {
     var behind = document.getElementById("behind-layers");
     var front = document.getElementById("front-layers");
+    var size = raster();
     behind.innerHTML = "";
     front.innerHTML = "";
     layers.forEach(function (layer) {
@@ -189,6 +216,8 @@
         node.src = previewUrl(layer.url);
         node.title = "CG layer " + levelLabel(layer.level);
         node.setAttribute("allowtransparency", "true");
+        node.setAttribute("width", String(size[0]));
+        node.setAttribute("height", String(size[1]));
         node.style.colorScheme = "normal";
         node.style.backgroundColor = "transparent";
       } else if (layer.type === "sdi-key") {
@@ -201,6 +230,7 @@
         node.textContent = "NDI \u00b7 " + layer.name;
       }
       if (!node) return;
+      sizeToRaster(node);
       node.style.zIndex = String(layer.level + 4);
       (layer.level < 0 ? behind : front).appendChild(node);
     });
@@ -377,7 +407,7 @@
     document.getElementById("preset-name").value = preset.name || "";
     layers = emptyLayers();
     (preset.layers || []).forEach(function (layer, index) {
-      if (index > 3) return;
+      if (index >= LAYER_SLOTS) return;
       var row = layers[index];
       row.enabled = true;
       row.level = layer.level;
@@ -389,6 +419,7 @@
     document.getElementById("squeeze").height = size[1];
     buildCornerInputs();
     buildLayerCards();
+    fitStage();
     draw();
     paintLayers();
   }
@@ -438,8 +469,10 @@
       applyChannelFormat(body.config || {});
       corners = identity();
       buildCornerInputs();
+      fitStage();
+      paintLayers();
       draw();
-    }).catch(function () { draw(); });
+    }).catch(function () { fitStage(); draw(); });
     fetch("/admin/preset.php").then(function (response) { return response.json(); }).then(function (body) {
       renderPresets(body.presets || []);
       if (body.html_renderer === "none") {
@@ -452,8 +485,10 @@
         applyChannelFormat(body.config || {});
         corners = identity();
         buildCornerInputs();
+        fitStage();
+        paintLayers();
         refreshStill();
-      }).catch(function () { refreshStill(); });
+      }).catch(function () { fitStage(); refreshStill(); });
     });
     document.getElementById("refresh-still").addEventListener("click", refreshStill);
     document.getElementById("in-frames").addEventListener("change", function () {
@@ -490,8 +525,14 @@
         })
         .catch(function (err) { note(false, err.message); });
     });
+    if (window.ResizeObserver) {
+      new ResizeObserver(function () { fitStage(); }).observe(document.getElementById("stage"));
+    } else {
+      window.addEventListener("resize", fitStage);
+    }
     refreshStill();
     timer = window.setInterval(refreshStill, STILL_MS);
+    fitStage();
     draw();
     paintLayers();
   }

@@ -204,7 +204,7 @@ function nexencoder_relay(int $status, string $payload): never
  * @param list<string> $headers
  * @return array{0:int,1:string}
  */
-function nexencoder_feed(string $path, string $body, array $headers): array
+function nexencoder_feed(string $path, string $body, array $headers, int $timeout = 5): array
 {
     $down = json_encode(['ok' => false, 'detail' => 'The encoder feed is not answering']);
     $url = NEXENCODER_FEED . $path;
@@ -218,7 +218,7 @@ function nexencoder_feed(string $path, string $body, array $headers): array
             CURLOPT_HTTPHEADER => $headers,
             CURLOPT_POSTFIELDS => $body,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => 5,
+            CURLOPT_TIMEOUT => $timeout,
             CURLOPT_CONNECTTIMEOUT => 2,
         ]);
         $payload = curl_exec($ch);
@@ -237,7 +237,7 @@ function nexencoder_feed(string $path, string $body, array $headers): array
             'header' => implode("\r\n", $headers),
             'content' => $body,
             'ignore_errors' => true,
-            'timeout' => 5,
+            'timeout' => $timeout,
         ],
     ]);
     $payload = @file_get_contents($url, false, $context);

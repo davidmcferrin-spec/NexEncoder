@@ -1,4 +1,4 @@
-"""CG feeders for the four layer slots.
+"""CG feeders for the two layer slots.
 
 HTML is a live page: WPE when that plugin is installed, otherwise Chromium
 capturing PNG with the background omitted so CSS alpha survives. NDI is a
@@ -235,6 +235,17 @@ CHROME_PROFILES = Path("/var/lib/nexencoder/chrome")
 # 8 s budget expired on every start and the layer never came up.
 PAGE_WAIT = 30.0
 SCREENSHOT_WAIT = 10.0
+# How long Chrome gets to show the tab it was started with. The 30 s logs
+# showed Chrome destroying that tab at start and never making another, so the
+# wait ran out every time before a page was asked for. A tab that is coming
+# shows within seconds; after this a page is requested.
+PAGE_GRACE = 4.0
+# Frames asked of Chrome per second. A screenshot takes as long as it takes, so
+# this is a ceiling; the layer runs at whatever the host can paint.
+CAPTURE_FPS = 30
+DECODER_BACKLOG = 60
+FPS_REPORT_FIRST = 10.0
+FPS_REPORT_EVERY = 120.0
 _SINGLETON_FILES = ("SingletonLock", "SingletonSocket", "SingletonCookie")
 
 
@@ -537,6 +548,72 @@ def run_pipe_feeder(argv: list[str], writer: SlotWriter, holder: "_Running", spa
         _stop_proc(proc)
 
 
+def png_decoder_argv() -> list[str]:
+    """ffmpeg that turns a stream of PNG screenshots into raw BGRA frames.
+
+    Chrome's PNGs are filtered per row. Undoing that in Python took seconds a
+    frame at 1080p, so the layer moved a few times a minute. ffmpeg does it in
+    C, and keeps straight alpha.
+    """
+    return [
+        "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error",
+        "-fflags", "nobuffer", "-flags", "low_delay",
+        "-probesize", "32", "-analyzeduration", "0",
+        "-f", "png_pipe", "-i", "pipe:0",
+        "-f", "rawvideo", "-pix_fmt", "bgra", "-fps_mode", "passthrough", "pipe:1",
+    ]
+
+
+class PngPipe:
+    """Persistent PNG-to-BGRA decoder that writes every frame into a slot.
+
+    ``feed`` hands over one PNG and returns. A thread reads the decoded frames,
+    so Chrome can paint the next screenshot while the last one is decoded.
+    """
+
+    def __init__(self, writer: SlotWriter, stop: threading.Event, spawn=subprocess.Popen) -> None:
+        self.writer = writer
+        self.stop = stop
+        self.frames = 0
+        self.proc = spawn(
+            png_decoder_argv(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        if self.proc.stderr is not None:
+            threading.Thread(
+                target=_drain, args=(self.proc.stderr, "png-decoder"), name="nexencoder-cg-png-log", daemon=True,
+            ).start()
+        self.thread = threading.Thread(target=self._pump, name="nexencoder-cg-png", daemon=True)
+        self.thread.start()
+
+    def _pump(self) -> None:
+        while not self.stop.is_set() and self.proc.stdout is not None:
+            frame = _read_exact(self.proc.stdout, self.writer.nbytes, self.stop)
+            if frame is None:
+                return
+            self.writer.write(frame)
+            self.frames += 1
+
+    def feed(self, png: bytes) -> None:
+        if self.proc.poll() is not None:
+            raise OSError(f"PNG decoder exited with status {self.proc.returncode}")
+        if self.proc.stdin is None:
+            raise OSError("PNG decoder has no input")
+        try:
+            self.proc.stdin.write(png)
+            self.proc.stdin.flush()
+        except (BrokenPipeError, ValueError) as exc:
+            raise OSError(f"PNG decoder closed its input: {exc}") from exc
+
+    def close(self) -> None:
+        if self.proc.stdin is not None:
+            try:
+                self.proc.stdin.close()
+            except OSError:
+                pass
+        _stop_proc(self.proc)
+        self.thread.join(timeout=2)
+
+
 def _free_port() -> int:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
@@ -660,10 +737,10 @@ def _attach_page(call, holder: "_Running", url: str, wait: float = PAGE_WAIT) ->
     The browser prints its socket before it has a tab. Wait for that tab, the
     way Puppeteer waits for the initial page before it does anything else: a
     page created during Chrome's own startup lost its renderer after one
-    frame. A page is asked for only when the wait ends without one. The reason
+    frame. A page is asked for only when PAGE_GRACE ends without one. The reason
     is empty on success and says what the browser reported when it is not.
     """
-    deadline = time.monotonic() + wait
+    deadline = time.monotonic() + min(wait, PAGE_GRACE)
     polls = 0
     seen = "no answer from the browser"
     target_id = ""
@@ -787,6 +864,7 @@ def run_chromium_feeder(
     # behind the DeckLink capture. preexec_fn is unsafe in a threaded process.
     proc = None
     sock = None
+    decoder = None
     started = time.monotonic()
     try:
         proc = spawn(
@@ -881,7 +959,12 @@ def run_chromium_feeder(
             )
         log.info("CG page %s is up after %.1fs", url, time.monotonic() - started)
         _prepare_page(call, session_id, writer.width, writer.height)
+        decoder = PngPipe(writer, holder.stop)
         wrong_size_noted = False
+        painted_at = time.monotonic()
+        report_at = painted_at + FPS_REPORT_FIRST
+        reported = 0
+        sent = 0
         while not holder.stop.is_set():
             started = time.monotonic()
             # A renderer that never answers would otherwise hold the layer
@@ -890,28 +973,34 @@ def run_chromium_feeder(
                 "format": "png",
                 "omitBackground": True,
                 "fromSurface": True,
+                "optimizeForSpeed": True,
             }, session_id, deadline=started + SCREENSHOT_WAIT)
             frame = result.get("data")
             if isinstance(frame, str):
                 png = base64.b64decode(frame)
-                try:
-                    pixels = decode_png_bgra(png)
-                except (ValueError, zlib.error) as exc:
-                    log.warning("HTML frame dropped: %s", exc)
-                else:
-                    if len(pixels) == writer.nbytes:
-                        writer.write(pixels)
-                    elif not wrong_size_noted:
-                        wrong_size_noted = True
-                        got_w, got_h = png_size(png)
-                        log.warning(
-                            "HTML frames are %sx%s but the slot is %sx%s; they are dropped until Chrome resizes",
-                            got_w, got_h, writer.width, writer.height,
-                        )
-            # Ten frames a second is enough for a bug. A tighter loop keeps
-            # Chrome busy and the DeckLink capture overruns.
-            remain = max(0.05, (1 / 10) - (time.monotonic() - started))
-            if holder.stop.wait(remain):
+                got_w, got_h = png_size(png)
+                if (got_w, got_h) == (writer.width, writer.height):
+                    if sent - decoder.frames > DECODER_BACKLOG:
+                        raise OSError(f"PNG decoder stopped answering ({decoder.frames} of {sent} frames back)")
+                    decoder.feed(png)
+                    sent += 1
+                elif not wrong_size_noted:
+                    wrong_size_noted = True
+                    log.warning(
+                        "HTML frames are %sx%s but the slot is %sx%s; they are dropped until Chrome resizes",
+                        got_w, got_h, writer.width, writer.height,
+                    )
+            now = time.monotonic()
+            if now >= report_at:
+                log.info(
+                    "HTML layer %s paints %.1f frames/s (%d decoded of %d sent)",
+                    url, (decoder.frames - reported) / max(0.001, now - painted_at), decoder.frames, sent,
+                )
+                reported = decoder.frames
+                painted_at = now
+                report_at = now + FPS_REPORT_EVERY
+            remain = max(0.0, (1 / CAPTURE_FPS) - (now - started))
+            if remain and holder.stop.wait(remain):
                 break
     except OSError as exc:
         log.warning("HTML renderer stopped: %s", exc)
@@ -920,6 +1009,8 @@ def run_chromium_feeder(
         log.warning("HTML renderer stopped", exc_info=True)
         holder.stop.wait(5)
     finally:
+        if decoder is not None:
+            decoder.close()
         if sock is not None:
             sock.close()
         _stop_proc(proc)

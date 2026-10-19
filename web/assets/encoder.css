@@ -228,26 +228,31 @@ button.unit-row.is-selected,
   border-radius: var(--nx-radius);
   overflow: hidden;
 }
+.stage-scale {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
 .stage canvas {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  top: 0;
+  left: 0;
   z-index: 2;
   cursor: crosshair;
 }
 .stage-layers {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
   z-index: 1;
 }
 .stage-front { z-index: 3; pointer-events: none; }
 .stage-layers iframe,
 .sdi-plate {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  top: 0;
+  left: 0;
   border: 0;
   background: transparent;
   color-scheme: normal;

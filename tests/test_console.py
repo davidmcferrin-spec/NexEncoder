@@ -53,14 +53,14 @@ def test_prometheus_down_is_a_json_error():
         httpd.shutdown()
 
 
-def test_service_action_requires_header_and_allowlist():
+def test_service_action_requires_header_and_allowlist(tmp_path):
     calls = []
 
     def run(args):
         calls.append(args)
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    httpd, port = _start(Console(unit_runner=run))
+    httpd, port = _start(Console(unit_runner=run, state_dir=tmp_path))
     try:
         request = Request(f"http://127.0.0.1:{port}/api/services/prometheus.service?action=restart", method="POST")
         try:
@@ -92,6 +92,10 @@ def test_service_action_requires_header_and_allowlist():
         with urlopen(request, timeout=3) as response:
             payload = json.loads(response.read().decode("utf-8"))
         assert payload["ok"] is True
+        audit = (tmp_path / "audit.log").read_text(encoding="utf-8")
+        assert "service.restart" in audit
+        assert "prometheus.service" in audit
+        assert '"ok":false' in audit and "nginx" in audit
         assert calls == [["restart", "prometheus.service"]]
     finally:
         httpd.shutdown()
@@ -218,9 +222,8 @@ def _post_raw(port: int, path: str):
         return exc.code, exc.headers, exc.read()
 
 
-def test_journal_clear_stores_the_zip_then_vacuums(tmp_path):
+def test_journal_clear_all_vacuums_without_a_zip(tmp_path):
     from nexencoder.channels import save_config
-    from nexencoder.support import DUMP_FILENAME
 
     config = tmp_path / "config.json"
     state = tmp_path / "state"
@@ -229,10 +232,6 @@ def test_journal_clear_stores_the_zip_then_vacuums(tmp_path):
 
     def support(argv):
         calls.append(list(argv))
-        if argv == ["journalctl", "--rotate"]:
-            assert (state / DUMP_FILENAME).is_file()
-        if argv and argv[0] == "journalctl" and "-u" in argv:
-            return 0, "cleared-line srt://user:pw@host\n", ""
         return 0, "ok\n", ""
 
     httpd, port = _start(Console(config_path=config, state_dir=state, support_runner=support))
@@ -248,19 +247,19 @@ def test_journal_clear_stores_the_zip_then_vacuums(tmp_path):
         status, missing = _get(port, "/api/journal/clear")
         assert status == 404
         status, headers, payload = _post_raw(port, "/api/journal/clear")
-        assert status == 200
-        assert payload.startswith(b"PK")
-        assert headers["X-Journal-Clear"] == "cleared"
-        assert "all.zip" in headers["Content-Disposition"]
-        assert (state / DUMP_FILENAME).read_bytes() == payload
-        assert b"pw@" not in payload
-        assert calls[-2] == ["journalctl", "--rotate"]
-        assert calls[-1] == ["journalctl", "--vacuum-time=1s"]
+        body = json.loads(payload)
+        assert status == 200 and body["ok"] is True
+        assert "zip" not in headers["Content-Type"]
+        assert not (state / "last-journal-dump.zip").exists()
+        assert calls == [["journalctl", "--rotate"], ["journalctl", "--vacuum-time=1s"]]
+        audit = (state / "audit.log").read_text(encoding="utf-8")
+        assert "journal.clear-all" in audit
+        assert '"ok":true' in audit
     finally:
         httpd.shutdown()
 
 
-def test_journal_clear_returns_the_zip_when_vacuum_fails(tmp_path):
+def test_journal_clear_all_reports_a_vacuum_failure(tmp_path):
     state = tmp_path / "state"
 
     def support(argv):
@@ -270,16 +269,18 @@ def test_journal_clear_returns_the_zip_when_vacuum_fails(tmp_path):
 
     httpd, port = _start(Console(state_dir=state, support_runner=support))
     try:
-        status, headers, payload = _post_raw(port, "/api/journal/clear")
-        assert status == 200 and payload.startswith(b"PK")
-        assert headers["X-Journal-Clear"] == "failed"
-        assert headers["X-Journal-Clear-Detail"] == "vacuum refused"
-        assert (state / "last-journal-dump.zip").read_bytes() == payload
+        status, _, payload = _post_raw(port, "/api/journal/clear")
+        body = json.loads(payload)
+        assert status == 500 and body["ok"] is False
+        assert body["detail"] == "vacuum refused"
+        assert not (state / "last-journal-dump.zip").exists()
+        audit = (state / "audit.log").read_text(encoding="utf-8")
+        assert "journal.clear-all" in audit and '"ok":false' in audit
     finally:
         httpd.shutdown()
 
 
-def test_journal_clear_does_not_vacuum_when_the_copy_cannot_be_stored(tmp_path):
+def test_journal_clear_all_still_vacuums_when_the_audit_file_cannot_be_written(tmp_path):
     blocked = tmp_path / "blocked"
     blocked.write_text("x", encoding="utf-8")
     calls = []
@@ -291,10 +292,28 @@ def test_journal_clear_does_not_vacuum_when_the_copy_cannot_be_stored(tmp_path):
     httpd, port = _start(Console(state_dir=blocked, support_runner=support))
     try:
         status, _, payload = _post_raw(port, "/api/journal/clear")
-        assert status == 500
-        assert "Could not store" in payload.decode("utf-8")
-        assert ["journalctl", "--rotate"] not in calls
-        assert ["journalctl", "--vacuum-time=1s"] not in calls
+        body = json.loads(payload)
+        assert status == 200 and body["ok"] is True
+        assert calls == [["journalctl", "--rotate"], ["journalctl", "--vacuum-time=1s"]]
+        assert not blocked.is_dir()
+    finally:
+        httpd.shutdown()
+
+
+def test_unit_journal_clear_sets_a_cutoff(tmp_path):
+    state = tmp_path / "state"
+    httpd, port = _start(Console(state_dir=state))
+    try:
+        status, _, payload = _post_raw(port, "/api/services/prometheus/log/clear")
+        body = json.loads(payload)
+        assert status == 200 and body["ok"] is True
+        assert body["unit"] == "prometheus.service"
+        assert body["since"]
+        status, _, rejected = _post_raw(port, "/api/services/nginx/log/clear")
+        assert status == 400
+        audit = (state / "audit.log").read_text(encoding="utf-8")
+        assert audit.count("journal.clear") == 1
+        assert "prometheus.service" in audit
     finally:
         httpd.shutdown()
 
@@ -325,6 +344,10 @@ def test_effect_recall_and_normalize_leave_the_pipeline_running(tmp_path):
         assert (state / "A.effect").read_text(encoding="utf-8").startswith("NXSQ 1")
         cleared = _post(port, "/api/channels/A/effects/normalize", {"frames": 0})
         assert cleared["normalized"] is True and cleared["frames"] == 0
+        audit = (state / "audit.log").read_text(encoding="utf-8")
+        assert "preset.save" in audit and "sidebar" in audit
+        assert "effect.recall" in audit and "preset_settings" in audit
+        assert "effect.normalize" in audit
         (state / "A.jpg").write_bytes(b"\xff\xd8\xff\xd9")
         with urlopen(f"http://127.0.0.1:{port}/api/channels/A/still", timeout=3) as response:
             assert response.status == 200

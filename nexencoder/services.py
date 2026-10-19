@@ -127,11 +127,15 @@ def act(unit: str, action: str, run: Runner | None = None) -> dict[str, object]:
     return {"ok": True, "unit": name, "action": action}
 
 
-def journal_argv(unit: str, follow: bool) -> list[str]:
+def journal_argv(unit: str, follow: bool, since: str | None = None) -> list[str]:
     name = normalize_unit(unit)
     if shutil.which("journalctl") is None:
         raise ServiceUnavailable("journalctl is not available on this host")
-    cmd = ["journalctl", "-u", name, "-n", "200", "-o", "short-iso", "--no-pager"]
+    cmd = ["journalctl", "-u", name, "-o", "short-iso", "--no-pager"]
+    if since:
+        cmd.extend(["--since", since])
+    else:
+        cmd.extend(["-n", "200"])
     if follow:
         cmd.append("-f")
     return _privileged(cmd)

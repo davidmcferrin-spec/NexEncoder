@@ -1,6 +1,6 @@
 """Squeeze, CG layers, and the files the capture filter reads.
 
-A preset stores a four-corner squeeze and up to four CG layers. Each layer
+A preset stores a four-corner squeeze and up to two CG layers. Each layer
 has a level from −4 to +4. Level 0 is the video input, so a CG layer cannot
 use it. Recall and normalize write those files in place. They do not restart
 the channel, so the VANC path and ``spliceinject`` keep running.
@@ -18,7 +18,7 @@ from pathlib import Path
 
 from .signal import signal_mode
 
-MAX_LAYERS = 4
+MAX_LAYERS = 2
 MAX_FRAMES = 600
 STILL_SECONDS = 8
 LEVELS = frozenset({-4, -3, -2, -1, 1, 2, 3, 4})
@@ -338,7 +338,7 @@ def _source(raw: object) -> dict:
 
 
 def normalize_effect(raw: object, channel_format: str | None = None) -> dict:
-    """Return one effect with legal corners, frame counts, and at most four layers."""
+    """Return one effect with legal corners, frame counts, and at most two layers."""
     if not isinstance(raw, dict):
         raise ValueError("effect must be an object")
     format_name = raw.get("format") or channel_format
@@ -532,7 +532,7 @@ def render_state(seq: int, frames: int, corners, slots: list[tuple[int, str]]) -
     for x, y in corners:
         lines.append(f"{x:.6f} {y:.6f}")
     if len(slots) != MAX_LAYERS:
-        raise ValueError("the filter state has four layer slots")
+        raise ValueError(f"the filter state has {MAX_LAYERS} layer slots")
     for index, (level, path) in enumerate(slots):
         token = path if path else "-"
         if any(ch.isspace() for ch in token):

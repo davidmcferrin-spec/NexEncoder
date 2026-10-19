@@ -266,7 +266,7 @@ def preview_argv(channel_id: str, ffmpeg: str = "ffmpeg", source: str | None = N
         "-fflags", "+genpts+discardcorrupt",
         # The pipe already starts on a keyframe. Do not sit for the default
         # five-second probe before the RTSP session opens.
-        "-analyzeduration", "500000", "-probesize", "500000",
+        "-analyzeduration", "1000000", "-probesize", "1000000",
         "-f", "mpegts", "-i", src,
         "-map", "0:v:0", "-map", "0:a:0?",
         "-vf", _preview_filter(),

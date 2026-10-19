@@ -109,13 +109,16 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     assert "/live/log.php" in services
     assert "/admin/journal.php" not in services and "/admin/support.php" in services
     assert "/admin/journal-clear.php" in services
-    assert "X-Journal-Clear" in services
-    assert "Journal dumped and cleared" in services
-    assert "delete the host journal" in services
+    assert "X-Journal-Clear" not in services
+    assert "Journal cleared" in services
+    assert "Delete the host journal" in services
+    assert "Clear the visible log" in services
     assert 'method: "POST"' in services
     page = (WEB / "services.php").read_text(encoding="utf-8")
     assert 'id="copy-journal"' in page and 'id="download-bundle"' in page
-    assert 'id="dump-clear"' in page and "Dump and clear" in page
+    assert 'id="clear-all"' in page and "Clear All" in page
+    assert 'id="clear-journal"' in page and "Clear log" in page
+    assert 'id="dump-clear"' not in page
     assert 'class="support-bundle-bar"' in page
     assert page.index("support-bundle-bar") < page.index('id="unit-list"')
     assert 'id="dump-journal"' not in page
@@ -124,6 +127,10 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     effects = (WEB / "assets" / "effects.js").read_text(encoding="utf-8")
     assert "/admin/preset.php" in effects and "/admin/recall.php" in effects
     assert "/live/still.php" in effects
+    assert "LAYER_SLOTS = 2" in effects and "fitStage" in effects
+    effects_page = (WEB / "effects.php").read_text(encoding="utf-8")
+    assert 'id="stage-scale"' in effects_page
+    assert "up to two CG layers" in effects_page
     preview = (WEB / "assets" / "preview.js").read_text(encoding="utf-8")
     assert "/api/" not in preview
     monitor = (WEB / "monitor.php").read_text(encoding="utf-8")

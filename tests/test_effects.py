@@ -144,8 +144,14 @@ def test_preset_limits_layers_and_raster():
         "layers": [{"level": 3, "source": {"type": "ndi", "name": "  GRAPHICS (NDI)  "}}],
     })
     assert ndi["layers"][0]["source"] == {"type": "ndi", "name": "GRAPHICS (NDI)"}
-    with pytest.raises(ValueError):
-        normalize_effect({**good, "layers": good["layers"] * 3})
+    assert len(effect["layers"]) == 2
+    with pytest.raises(ValueError, match="2 CG layers"):
+        normalize_effect({
+            "format": "1080i59.94",
+            "layers": good["layers"] + [
+                {"level": 4, "source": {"type": "html", "url": "https://cg.example/c"}},
+            ],
+        })
     with pytest.raises(ValueError, match="one SDI"):
         normalize_effect({
             "format": "1080i59.94",
@@ -197,6 +203,7 @@ def test_recall_and_normalize_write_filter_state_without_a_new_pipeline(tmp_path
     assert recalled["html"] is True
     assert state["frames"] == 10
     assert state["corners"][0] == pytest.approx((480.0, 0.0))
+    assert len(state["slots"]) == 2
     assert state["slots"][0][0] == -4
     assert state["slots"][1] == (0, "-")
     omitted = normalize_channel(tmp_path, "A", {}, config)

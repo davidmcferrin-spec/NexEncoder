@@ -24,6 +24,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl, parse_qs, urlencode, urlsplit, urlunsplit, urlparse
 
 from . import __version__
+from .audit import try_record
 from .channels import CHANNELS, INPUT_SRT_PORTS, load_config
 from .hoststats import HostCollector, parse_uptime
 from .pipeline import (
@@ -825,11 +826,17 @@ class Agent:
     def control(self, action: str, outputs: object, caller: str) -> dict:
         if action not in CONTROL_ACTIONS:
             log.info("control caller=%s action=%s outputs=%s ok=false detail=rejected", caller, action, outputs)
+            try_record(self.state_dir, "noc.control", {
+                "caller": caller, "action": action, "outputs": outputs, "ok": False, "detail": "rejected",
+            })
             raise NocError(400, "bad_request", "action must be start, stop, or restart")
         try:
             ids = normalize_outputs(outputs)
         except NocError:
             log.info("control caller=%s action=%s outputs=%s ok=false detail=rejected", caller, action, outputs)
+            try_record(self.state_dir, "noc.control", {
+                "caller": caller, "action": action, "outputs": outputs, "ok": False, "detail": "rejected",
+            })
             raise
         now = self.wall()
         results = []
@@ -858,6 +865,13 @@ class Agent:
             str(all_ok).lower(),
             summary,
         )
+        try_record(self.state_dir, "noc.control", {
+            "caller": caller,
+            "action": action,
+            "outputs": ids,
+            "ok": all_ok,
+            "detail": summary,
+        })
         return {
             "ok": all_ok,
             "api_version": API_VERSION,

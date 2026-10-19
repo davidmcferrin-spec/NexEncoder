@@ -169,9 +169,33 @@
     });
   });
 
+  $("clear-journal").addEventListener("click", function () {
+    if (!window.confirm("Clear the visible log for " + selected + "? Older lines stay on disk until Clear All.")) {
+      return;
+    }
+    note("action-status", true, "Clearing log…");
+    fetch("/admin/journal-clear.php?unit=" + encodeURIComponent(selected), {
+      method: "POST",
+      headers: { "X-Requested-With": "NexEncoder" }
+    }).then(function (response) {
+      return response.json().then(function (body) {
+        if (!response.ok || !body.ok) {
+          throw new Error(body.detail || "Could not clear the log");
+        }
+        return body;
+      });
+    }).then(function () {
+      $("journal").textContent = "";
+      follow(selected);
+      note("action-status", true, "Log cleared");
+    }).catch(function (err) {
+      note("action-status", false, err.message || "Could not clear the log");
+    });
+  });
+
   function setBundleBusy(busy) {
     $("download-bundle").disabled = busy;
-    $("dump-clear").disabled = busy;
+    $("clear-all").disabled = busy;
   }
 
   $("download-bundle").addEventListener("click", function () {
@@ -198,38 +222,28 @@
     });
   });
 
-  $("dump-clear").addEventListener("click", function () {
-    if (!window.confirm("Download the full journal and then delete the host journal? This removes logs for the whole machine. Services keep running.")) {
+  $("clear-all").addEventListener("click", function () {
+    if (!window.confirm("Delete the host journal for every service? Services keep running. The audit log is kept.")) {
       return;
     }
-    note("bundle-status", true, "Dumping journal…");
+    note("bundle-status", true, "Clearing journal…");
     setBundleBusy(true);
     fetch("/admin/journal-clear.php", {
       method: "POST",
       headers: { "X-Requested-With": "NexEncoder" }
     }).then(function (response) {
-      var cleared = response.headers.get("X-Journal-Clear") || "";
-      var detail = response.headers.get("X-Journal-Clear-Detail") || "";
-      if (!response.ok) {
-        return response.json().then(function (body) {
-          throw new Error(body.detail || "Journal dump failed");
-        });
-      }
-      var name = fileName(response, "nexencoder-support-all.zip");
-      return response.blob().then(function (blob) {
-        saveBlob(blob, name);
-        return { cleared: cleared, detail: detail };
+      return response.json().then(function (body) {
+        if (!response.ok || !body.ok) {
+          throw new Error(body.detail || "Journal was not cleared");
+        }
+        return body;
       });
-    }).then(function (result) {
-      if (result.cleared === "cleared") {
-        follow(selected);
-        note("bundle-status", true, "Journal dumped and cleared");
-        return;
-      }
-      var why = result.detail ? (": " + result.detail) : "";
-      note("bundle-status", false, "Zip downloaded. Journal was not cleared" + why);
+    }).then(function () {
+      $("journal").textContent = "";
+      follow(selected);
+      note("bundle-status", true, "Journal cleared");
     }).catch(function (err) {
-      note("bundle-status", false, err.message || "The console did not answer. When a dump was saved, it is last-journal-dump.zip on the encoder.");
+      note("bundle-status", false, err.message || "Journal was not cleared");
     }).then(function () {
       setBundleBusy(false);
     });

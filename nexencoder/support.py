@@ -151,6 +151,7 @@ def build_bundle(
     hostname: str = "",
     now: datetime | None = None,
     journal_limit: int | None = MAX_JOURNAL_BYTES,
+    state_dir: Path | None = None,
 ) -> tuple[str, bytes]:
     window = parse_hours(hours)
     run = runner or _default_runner
@@ -177,6 +178,13 @@ def build_bundle(
             archive.writestr("config/encoder.json", redact(config_path.read_text(encoding="utf-8")))
         else:
             notes.append("encoder config was not on disk")
+        if state_dir is not None:
+            from .audit import read_audit
+
+            audit_text = read_audit(state_dir)
+            archive.writestr("audit/audit.log", redact(audit_text))
+            if not audit_text.strip():
+                notes.append("audit log was empty")
         for unit in JOURNAL_UNITS:
             code, stdout, stderr = run(journal_command(unit, window))
             text = stdout if stdout.strip() else (stderr or f"journalctl exited {code}\n")
@@ -187,7 +195,7 @@ def build_bundle(
             "NexEncoder support bundle\n"
             f"Window: {'all retained journal lines' if window is None else f'last {window} hours'}\n"
             f"Generated: {stamp}\n"
-            "Includes every encoder service journal, systemd status, lsmod, dmesg warnings, and DeckLink status.\n"
+            "Includes every encoder service journal, the operator audit log, systemd status, lsmod, dmesg warnings, and DeckLink status.\n"
             "URL credentials and password-like fields are redacted. The NOC token is not included.\n"
         )
         if notes:
@@ -231,6 +239,7 @@ def dump_and_clear(
 ) -> tuple[str, bytes, str]:
     """Save a full redacted journal zip, then vacuum. The third value is empty when cleared.
 
+    The Services page Clear All button does not call this. It vacuums without a zip.
     The zip is written under state_dir before any journal file is removed. A failed
     copy leaves the journal alone. A failed vacuum still returns the zip.
     """
@@ -241,6 +250,7 @@ def dump_and_clear(
         hostname=hostname,
         now=now,
         journal_limit=None,
+        state_dir=state_dir,
     )
     _store_dump(state_dir, data)
     return filename, data, clear_journal(runner)

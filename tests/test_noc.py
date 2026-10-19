@@ -517,6 +517,10 @@ def test_control_logs_caller_and_returns_state(tmp_path, caplog):
     assert ("restart", "nexencoder-channel@A.service") in ctl.calls
     assert "203.0.113.8" in caplog.text
     assert "restart" in caplog.text
+    audit = (tmp_path / "state" / "audit.log").read_text(encoding="utf-8")
+    assert "noc.control" in audit
+    assert "203.0.113.8" in audit
+    assert '"action":"restart"' in audit
     ctl.fail.add("nexencoder-channel@B.service")
     both = agent.control("restart", "all", "203.0.113.8")
     assert both["ok"] is False

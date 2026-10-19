@@ -4,7 +4,8 @@ import subprocess
 
 import pytest
 
-from nexencoder.services import ServiceError, ServiceUnavailable, act, list_units, normalize_unit
+from nexencoder.audit import mark_journal_cleared
+from nexencoder.services import ServiceError, ServiceUnavailable, act, journal_argv, list_units, normalize_unit
 
 
 def test_normalize_unit_allowlist():
@@ -48,3 +49,15 @@ def test_act_rejects_unknown_action_and_surfaces_stderr():
 
     with pytest.raises(ServiceError, match="access denied"):
         act("prometheus", "restart", run)
+
+
+def test_journal_argv_starts_at_the_cutoff(tmp_path, monkeypatch):
+    monkeypatch.setattr("nexencoder.services.shutil.which", lambda name: "/usr/bin/journalctl")
+    stamp = mark_journal_cleared(tmp_path, "prometheus.service")
+    argv = journal_argv("prometheus", False, since=stamp)
+    journal = argv[argv.index("journalctl"):]
+    assert journal[journal.index("--since") + 1] == stamp
+    assert "-n" not in journal
+    followed = journal_argv("prometheus.service", True)
+    tailed = followed[followed.index("journalctl"):]
+    assert "-n" in tailed and "-f" in tailed and "--since" not in tailed

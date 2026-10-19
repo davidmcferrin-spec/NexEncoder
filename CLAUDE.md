@@ -22,13 +22,13 @@ to SCTE-35) and shown on a low-latency WebRTC proxy preview via MediaMTX.
   `tsp` SRT or FFmpeg HLS. GStreamer is installed for the host; the live path is ffmpeg | tsp.
 - Control plane: Apache and PHP serve the operator pages on port 80 (no login). `python3 -m nexencoder.console` is the live feed on `127.0.0.1:8788`. PHP calls that feed. Admin saves are PHP scripts. `python3 -m nexencoder.noc` is a separate bearer-token API for NexNOC (`/api/noc/v1`, contract in `docs/NOC-AGENT-API.md`). Caption and splice
   notes are posted to `/api/sideband` and the monitor page polls them. Config is saved through
-  PHP and applied by restarting `nexencoder-channel@A` / `@B`. The Inputs page can restart that unit. The Services page can copy the visible journal. Its support-bundle bar, separate from the unit list, downloads one redacted zip of every encoder service plus host details such as lsmod and dmesg, for 24, 36, 48, or 72 hours, or the whole journal. The NOC token is not included. Dump and clear on that bar saves the full redacted journal, keeps a copy in the state directory, then vacuums the host journal. Services keep running. Effect recall, normalize,
+  PHP and applied by restarting `nexencoder-channel@A` / `@B`. The Inputs page can restart that unit. The Services page can copy the visible journal. Its support-bundle bar, separate from the unit list, downloads one redacted zip of every encoder service plus host details such as lsmod and dmesg, for 24, 36, 48, or 72 hours, or the whole journal. The NOC token is not included. Clear log on the selected unit hides older lines in that journal view. Clear All on that bar rotates and vacuums the host journal without downloading a zip. Services keep running. Operator actions are appended to the state directory audit log, that file is included in the support zip, and Clear All does not erase it. Effect recall, normalize,
   and bars-with-ident do not restart the channel. Input A is DeckLink Duo (1) or SRT
   listener port 9001; input B is DeckLink Duo (2) or port 9002. Output B listens on 9101.
   Auto on the Inputs page reads the locked SDI mode from `decklink-status`, or the SRT caller's stream banner, and saves that raster.
   Layer −5 is the waiting picture. Layer +5 is bars plus an ident. A tone replaces audio
   while bars are the picture. Preset corners are fractions of the frame.
-  Up to four CG layers each take a level from −4 to +4; 0 is the video. HTML is painted live by
+  Up to two CG layers each take a level from −4 to +4; 0 is the video. HTML is painted live by
   WPE or Chromium with alpha kept. Ubuntu 24.04 does not package WPE, so `setup.sh` installs Google Chrome for that path.
   Chromium runs under nice 10, gets 30 s to show a page, and keeps one profile per layer in `/var/lib/nexencoder/chrome/<channel>-<slot>`.
   `python3 -m nexencoder.cgfeed --probe URL` runs that renderer once outside the channel and reports the first frame. An NDI source can occupy a layer when ndisrc is installed.

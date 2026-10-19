@@ -155,6 +155,22 @@ def test_dump_returns_the_zip_when_vacuum_fails(tmp_path):
     assert (tmp_path / "state" / DUMP_FILENAME).read_bytes() == data
 
 
+def test_bundle_includes_the_audit_log_and_redacts_it(tmp_path):
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "audit.log").write_text(
+        '{"action":"config.save","settings":{"passphrase":"super-secret","url":"srt://caller:hunter2@example:9000"}}\n',
+        encoding="utf-8",
+    )
+    _, data = build_bundle("24", runner=_quiet, hostname="box", state_dir=state)
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        text = archive.read("audit/audit.log").decode("utf-8")
+    assert "config.save" in text
+    assert "super-secret" not in text
+    assert "hunter2" not in text
+    assert "REDACTED" in text
+
+
 def test_dump_does_not_clear_when_the_copy_cannot_be_stored(tmp_path):
     blocked = tmp_path / "blocked"
     blocked.write_text("x", encoding="utf-8")

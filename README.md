@@ -60,10 +60,12 @@ The journal view can be copied for the selected unit. The support bundle, on its
 encoder service (channels, console, NOC, DeckLink setup, MediaMTX, Prometheus, and Apache), plus
 host details such as `lsmod`, `dmesg`, and DeckLink status, for the last 24, 36, 48, or 72 hours,
 or the whole journal. URL credentials and password fields are redacted and the NOC token is left
-out. Dump and clear, on that same bar, saves the full redacted journal with no size cap, keeps a
-copy at `/var/lib/nexencoder/state/last-journal-dump.zip`, then rotates and vacuums the host
-journal. The hours menu does not apply, and the encoder services keep running. If the vacuum
-fails, the zip is still downloaded. The Inputs page can restart `nexencoder-channel@A` or `@B` after a save.
+out. The zip includes the operator audit log. Clear log on the selected unit hides that unit's
+older journal lines; those lines stay on disk until Clear All. Clear All, on that same bar,
+rotates and vacuums the host journal and does not download a zip. Services keep running. The
+audit log at `/var/lib/nexencoder/state/audit.log` records each action and its settings. There
+is no login, so a line is a time, an action, and the settings. Clear All does not delete that
+file. The Inputs page can restart `nexencoder-channel@A` or `@B` after a save.
 
 The monitor page plays each program from MediaMTX at `http://<host>:8889/inputA/whep` and
 `inputB`. That proxy decodes the same local feed SRT sends, so squeeze, graphics, and bars
@@ -89,7 +91,7 @@ DeckLink Duo (3) and (4). Chromium runs under `nice 10` behind the encodes and g
 `python3 -m nexencoder.cgfeed --probe http://127.0.0.1/cg/bug.html` on the host: it
 starts the same renderer outside the channel and prints Chrome's messages, the time
 to the first painted frame, and how much of that frame is opaque. Each layer takes a level from −4 to +4; 0 is the video.
-A channel holds at most four layers, and two layers cannot share a level.
+A channel holds at most two layers, and those two cannot share a level.
 
 Input A is DeckLink Duo (1) or an SRT listener on port 9001. Input B is DeckLink Duo (2)
 or port 9002. Auto, beside each raster menu, reads the locked SDI mode or the connected
@@ -183,7 +185,7 @@ existing token or `noc.json`.
 - [x] Phase 3: H.264/AAC, tsp SCTE-35 insert, SRT caller/listener, HLS push/pull, channel supervisor
 - [x] Phase 4: MediaMTX preview (RTSP publish, WHEP on the monitor page) and caption/SCTE sideband. The operator console uses the NexApp theme.
 - [x] Phase 5: `nexencoder-console`, `nexencoder-channel@`, and `mediamtx` units; `setup.sh` installs ffmpeg, GStreamer, Prometheus, and MediaMTX
-- [x] Phase 6: four-corner squeeze, up to four CG layers (HTML or one SDI fill/key), effect builder, preset recall and normalize
+- [x] Phase 6: four-corner squeeze, up to two CG layers (HTML or one SDI fill/key), effect builder, preset recall and normalize
 - [x] Phase 7: SDI or SRT listener per input, waiting picture on layer −5, bars and ident on layer +5, fractional presets, 1080p
 - [x] NOC agent: `/api/noc/v1` identity, host metrics, per-output status, and start/stop/restart. See `docs/NOC-AGENT-API.md`.
 

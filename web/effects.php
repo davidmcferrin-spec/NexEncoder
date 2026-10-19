@@ -49,7 +49,7 @@ header('X-Content-Type-Options: nosniff');
     <div class="page-head">
       <div>
         <h1>Effects</h1>
-        <p class="lead">Squeeze the primary and stack up to four CG layers. Recall and normalize stay on the running channel, so 608/708 and SCTE-104/35 keep passing.</p>
+        <p class="lead">Squeeze the primary and stack up to two CG layers. Recall and normalize stay on the running channel, so 608/708 and SCTE-104/35 keep passing.</p>
       </div>
     </div>
     <div class="effects-layout">
@@ -64,9 +64,11 @@ header('X-Content-Type-Options: nosniff');
           <span class="muted" id="still-note">Clean still refreshes every 8 seconds.</span>
         </div>
         <div class="stage" id="stage">
-          <div class="stage-layers" id="behind-layers"></div>
-          <canvas id="squeeze" width="1920" height="1080"></canvas>
-          <div class="stage-layers stage-front" id="front-layers"></div>
+          <div class="stage-scale" id="stage-scale">
+            <div class="stage-layers" id="behind-layers"></div>
+            <canvas id="squeeze" width="1920" height="1080"></canvas>
+            <div class="stage-layers stage-front" id="front-layers"></div>
+          </div>
         </div>
         <div class="corner-grid" id="corner-grid"></div>
         <div class="grid-2">

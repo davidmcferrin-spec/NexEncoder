@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from .audit import clear_journal_cutoffs, journal_since, mark_journal_cleared, try_record
 from .channels import load_config, save_config, snapshot_for
 from .cgfeed import detect_html_backend, ndi_available
 from .decklink import DeckLinkWatch, list_devices
@@ -45,7 +46,7 @@ from .services import (
     list_units,
     normalize_unit,
 )
-from .support import DUMP_FILENAME, build_bundle, dump_and_clear
+from .support import build_bundle, clear_journal
 from .sideband import Sideband
 from .status import signals_from_progress
 from .vanc import events_from_vanc
@@ -74,10 +75,13 @@ class Console:
         repo = Path(__file__).resolve().parents[1]
         self.prometheus_url = prometheus_url
         self.unit_runner = unit_runner
-        self.journal_builder = journal_builder or journal_argv
         self.support_runner = support_runner
         self.config_path = config_path or (repo / "var" / "config.json")
         self.state_dir = state_dir or (repo / "var" / "state")
+        bound = self.state_dir
+        self.journal_builder = journal_builder or (
+            lambda unit, follow, bound=bound: journal_argv(unit, follow, since=journal_since(bound, unit))
+        )
         self.device_lister = device_lister or list_devices
         self.splice_sender = splice_sender
         self.sideband = sideband or Sideband()
@@ -185,9 +189,11 @@ def make_handler(console: Console):
             try:
                 if parts == ["api", "config"]:
                     self._save_config(body)
+                elif len(parts) == 5 and parts[0] == "api" and parts[1] == "services" and parts[3] == "log" and parts[4] == "clear":
+                    self._clear_unit_journal(unquote(parts[2]))
                 elif len(parts) == 3 and parts[0] == "api" and parts[1] == "services":
                     action = parse_qs(parsed.query).get("action", [""])[-1]
-                    self._json(200, act(unquote(parts[2]), action, console.unit_runner))
+                    self._service_action(unquote(parts[2]), action)
                 elif parts == ["api", "sideband"]:
                     self._save_sideband(body)
                 elif parts == ["api", "effects", "presets"]:
@@ -229,6 +235,7 @@ def make_handler(console: Console):
                 if spec.get("waiting") == "loop":
                     check_loop_file(spec.get("loop") or "")
             saved = save_config(console.config_path, raw)
+            try_record(console.state_dir, "config.save", saved)
             self._json(200, {"ok": True, "config": saved})
 
         def _bars(self, channel_id: str, body: bytes) -> None:
@@ -238,6 +245,7 @@ def make_handler(console: Console):
             if not isinstance(raw, dict) or not isinstance(raw.get("enabled"), bool):
                 raise ValueError("enabled must be true or false")
             write_flag(bars_path(console.state_dir, channel_id), raw["enabled"])
+            try_record(console.state_dir, "effect.bars", {"channel": channel_id, "enabled": raw["enabled"]})
             self._json(200, {"ok": True, "channel": channel_id, "enabled": raw["enabled"]})
 
         def _detect(self, channel_id: str) -> None:
@@ -248,6 +256,12 @@ def make_handler(console: Console):
             found = detect_channel(
                 channel_id, console.config_path, console.state_dir, probe=console.format_probe,
             )
+            try_record(console.state_dir, "input.detect", {
+                "channel": channel_id,
+                "ok": found.get("ok"),
+                "format": found.get("format"),
+                "detail": found.get("detail"),
+            })
             self._json(200, found)
 
         def _save_sideband(self, body: bytes) -> None:
@@ -294,6 +308,10 @@ def make_handler(console: Console):
                 "label": "SCTE-35",
                 "text": f"{len(sections)} section(s) to port {port}",
             })
+            settings = {"channel": channel_id, "sections": len(sections), "port": port}
+            if body[:1] == b"{" and isinstance(raw, dict) and "pts" in raw:
+                settings["pts"] = raw.get("pts")
+            try_record(console.state_dir, "scte.inject", settings)
             self._json(200, {"ok": True, "channel": channel_id, "sections": len(sections), "port": port})
 
         def _presets(self) -> None:
@@ -309,9 +327,11 @@ def make_handler(console: Console):
                 if not isinstance(name, str) or not name.strip():
                     raise ValueError("preset name is required")
                 delete_preset(console.state_dir, name.strip())
+                try_record(console.state_dir, "preset.delete", {"name": name.strip()})
                 self._json(200, {"ok": True, "presets": [preset_json(item) for item in load_presets(console.state_dir)]})
                 return
             preset = upsert_preset(console.state_dir, raw)
+            try_record(console.state_dir, "preset.save", preset_json(preset))
             self._json(200, {"ok": True, "preset": preset_json(preset)})
 
         def _recall(self, channel_id: str, body: bytes) -> None:
@@ -327,6 +347,14 @@ def make_handler(console: Console):
                 warnings.append("NDI receiver is not installed; those layers stay transparent")
             if warnings:
                 result["warning"] = " ".join(warnings)
+            applied = {"channel": channel_id, "preset": result.get("preset") or "", "frames": result.get("frames")}
+            if isinstance(raw.get("effect"), dict):
+                applied["effect"] = raw["effect"]
+            elif result.get("preset"):
+                match = next((item for item in load_presets(console.state_dir) if item["name"] == result["preset"]), None)
+                if match is not None:
+                    applied["preset_settings"] = preset_json(match)
+            try_record(console.state_dir, "effect.recall", applied)
             self._json(200, {"ok": True, **result})
 
         def _normalize(self, channel_id: str, body: bytes) -> None:
@@ -335,6 +363,11 @@ def make_handler(console: Console):
                 raise ValueError("normalize body must be an object")
             config = load_config(console.config_path)
             result = normalize_channel(console.state_dir, channel_id, raw, config)
+            try_record(console.state_dir, "effect.normalize", {
+                "channel": channel_id,
+                "frames": result.get("frames"),
+                "normalized": True,
+            })
             self._json(200, {"ok": True, **result})
 
         def _still(self, channel_id: str) -> None:
@@ -369,32 +402,48 @@ def make_handler(console: Console):
                     hours,
                     config_path=console.config_path,
                     runner=console.support_runner,
+                    state_dir=console.state_dir,
                 )
             except ValueError as exc:
                 self._json(400, {"ok": False, "detail": str(exc)})
                 return
             self._bytes(200, "application/zip", data, filename)
 
-        def _journal_clear(self) -> None:
+        def _service_action(self, unit: str, action: str) -> None:
             try:
-                filename, data, detail = dump_and_clear(
-                    state_dir=console.state_dir,
-                    config_path=console.config_path,
-                    runner=console.support_runner,
-                )
+                result = act(unit, action, console.unit_runner)
+            except (ServiceError, ServiceUnavailable) as exc:
+                try_record(console.state_dir, f"service.{action}", {"unit": unit, "ok": False, "detail": str(exc)})
+                raise
+            try_record(console.state_dir, f"service.{action}", {"unit": result["unit"], "ok": True})
+            self._json(200, result)
+
+        def _clear_unit_journal(self, unit: str) -> None:
+            name = normalize_unit(unit)
+            try:
+                stamp = mark_journal_cleared(console.state_dir, name)
             except OSError as exc:
-                log.warning("journal dump was not stored: %s", exc)
-                self._json(500, {"ok": False, "detail": "Could not store the journal dump"})
+                log.warning("journal cutoff was not stored: %s", exc)
+                self._json(500, {"ok": False, "detail": "Could not store the journal cutoff"})
                 return
-            kept = console.state_dir / DUMP_FILENAME
+            try_record(console.state_dir, "journal.clear", {"unit": name, "since": stamp})
+            self._json(200, {"ok": True, "unit": name, "since": stamp})
+
+        def _journal_clear(self) -> None:
+            detail = clear_journal(console.support_runner)
             if detail:
-                log.warning("journal dump stored at %s; clear failed: %s", kept, detail)
+                log.warning("host journal was not cleared: %s", detail)
             else:
-                log.info("journal dump stored at %s and the host journal was cleared", kept)
-            headers = {"X-Journal-Clear": "failed" if detail else "cleared"}
+                try:
+                    clear_journal_cutoffs(console.state_dir)
+                except OSError as exc:
+                    log.warning("journal cutoffs were not cleared: %s", exc)
+                log.info("host journal was cleared")
+            try_record(console.state_dir, "journal.clear-all", {"ok": not detail, "detail": detail})
             if detail:
-                headers["X-Journal-Clear-Detail"] = detail
-            self._bytes(200, "application/zip", data, filename, headers)
+                self._json(500, {"ok": False, "detail": detail})
+                return
+            self._json(200, {"ok": True})
 
         def _journal(self, unit: str) -> None:
             try:

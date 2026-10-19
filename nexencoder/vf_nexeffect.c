@@ -29,7 +29,7 @@
 #include "filters.h"
 #include "video.h"
 
-#define NX_SLOTS 4
+#define NX_SLOTS 2
 #define NX_HEADER 32
 
 typedef struct LayerSlot {
