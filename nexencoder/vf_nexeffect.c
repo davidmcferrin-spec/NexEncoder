@@ -731,7 +731,7 @@ static const uint8_t *slot_frame(NexEffectContext *s, int index, int w, int h)
         s->layer = spare;
         s->slot_seq[index] = seen;
         s->slot_cached[index] = 1;
-        snprintf(s->slot_cache_path[index], sizeof s->slot_cache_path[index], "%s", path);
+        av_strlcpy(s->slot_cache_path[index], path, sizeof s->slot_cache_path[index]);
         return s->slot_cache[index];
     }
     return same ? s->slot_cache[index] : NULL;
