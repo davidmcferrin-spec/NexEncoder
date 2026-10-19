@@ -67,12 +67,14 @@ def test_srt_input_keeps_an_encode_clock_without_a_still():
 
 def test_splice_and_srt_listener():
     splice = splice_argv("A")
-    assert splice[splice.index("-O") + 1] == "udp"
-    assert "127.0.0.1:19001" in splice
+    assert splice[splice.index("-O") + 1] == "ip"
+    assert "239.255.1.1:19001" in splice
+    assert splice[splice.index("--local-address") + 1] == "127.0.0.1"
     assert "127.0.0.1:19101" in splice
     assert "496/0x86" in splice
     listener = egress_argv("A", "srt-listener", "", 9000, "", "/tmp/hls")
-    assert listener[listener.index("-I") + 1] == "udp"
+    assert listener[listener.index("-I") + 1] == "ip"
+    assert listener[listener.index("--local-address") + 1] == "127.0.0.1"
     assert listener[listener.index("--listener") + 1] == ":9000"
     assert listener[listener.index("--statistics-interval") + 1] == str(SRT_STATS_INTERVAL_MS)
     assert f"--json-line={SRT_STATS_PREFIX}" in listener
@@ -86,6 +88,7 @@ def test_splice_and_srt_listener():
 
 def test_hls_pull_copies_and_push_puts():
     pull = egress_argv("A", "hls-pull", "", 0, "", "/var/lib/nexencoder/hls/A")
+    assert any(item.startswith("udp://239.255.1.1:19001?localaddr=127.0.0.1") for item in pull)
     assert pull[pull.index("-c") + 1] == "copy"
     assert pull[-1].endswith("index.m3u8")
     push = egress_argv("B", "hls-push", "", 0, "https://origin.example/live/b.m3u8", "/tmp")

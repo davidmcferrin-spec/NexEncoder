@@ -15,9 +15,10 @@ from .signal import SignalMode, h264_level, lavfi_rate, signal_mode
 FEED_PORT = {"A": 19001, "B": 19002}
 SPLICE_PORT = {"A": 19101, "B": 19102}
 VANC_PORT = {"A": 19201, "B": 19202}
-# One reader per channel, so the program feed stays on loopback unicast.
-# TSDuck's ip plugin accepts multicast only, so both ends of this feed use udp.
-FEED_ADDR = "127.0.0.1"
+# TSDuck 3.45 ships the ip plugin and no udp plugin. The ip input only joins a
+# multicast group, so the program feed is this group on the loopback interface.
+FEED_ADDR = "239.255.1.1"
+FEED_LOCAL = "127.0.0.1"
 SCTE_PID = 0x1F0
 PREVIEW_SIZE = "960:540"
 PREVIEW_RTSP = "rtsp://127.0.0.1:8554"
@@ -238,8 +239,8 @@ def splice_argv(channel_id: str, tsp: str = "tsp") -> list[str]:
         "--inject-interval", "500",
         "--min-inter-packet", "400",
         "-P", "filter", "--negate", "--pid", "0x1FFF",
-        "-O", "udp", f"{FEED_ADDR}:{port}",
-        "--local-address", FEED_ADDR,
+        "-O", "ip", f"{FEED_ADDR}:{port}",
+        "--local-address", FEED_LOCAL,
     ]
 
 
@@ -259,8 +260,8 @@ def srt_argv(
     feed = FEED_PORT[channel_id]
     argv = [
         tsp,
-        "-I", "udp", f"{FEED_ADDR}:{feed}",
-        "--local-address", FEED_ADDR,
+        "-I", "ip", f"{FEED_ADDR}:{feed}",
+        "--local-address", FEED_LOCAL,
         "-O", "srt",
         "--latency", str(SRT_LATENCY_MS),
         "--transtype", "live",
@@ -289,7 +290,7 @@ def hls_argv(
     ffmpeg: str = "ffmpeg",
 ) -> list[str]:
     feed = FEED_PORT[channel_id]
-    src = f"udp://{FEED_ADDR}:{feed}?localaddr={FEED_ADDR}&reuse=1&fifo_size=2000000&overrun_nonfatal=1"
+    src = f"udp://{FEED_ADDR}:{feed}?localaddr={FEED_LOCAL}&reuse=1&fifo_size=2000000&overrun_nonfatal=1"
     argv = [
         ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "warning",
         "-f", "mpegts", "-i", src,
