@@ -71,6 +71,7 @@ typedef struct NexEffectContext {
     uint8_t *field_src;
     uint8_t *field_warp;
     uint8_t *layer;
+    AVFilterContext *self;
     uint8_t *wait_cache;
     int wait_kind;
     int64_t cost_us[4];
@@ -200,7 +201,52 @@ static void sample_rgba(const uint8_t *src, int w, int h, double x, double y, ui
     }
 }
 
-static void warp_rgba(const uint8_t *src, uint8_t *dst, int w, int h, const double corners[8])
+typedef struct WarpJob {
+    const uint8_t *src;
+    uint8_t *dst;
+    int w, h, x_from, x_to, y_from, y_to;
+    double row_scale, row_shift;
+    const int *col_a, *col_b, *col_w;
+    const uint8_t *col_ok;
+} WarpJob;
+
+/* One band of destination rows for a rectangle squeeze. The column tables are
+ * shared and read-only; each band writes only its own rows. */
+static int warp_rows(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
+{
+    const WarpJob *job = arg;
+    int rows = job->y_to - job->y_from;
+    int y_begin = job->y_from + (int)((int64_t)rows * jobnr / nb_jobs);
+    int y_end = job->y_from + (int)((int64_t)rows * (jobnr + 1) / nb_jobs);
+    int w = job->w, h = job->h, x, y;
+    for (y = y_begin; y < y_end; y++) {
+        double py = job->row_scale * (y + 0.5) + job->row_shift - 0.5;
+        int y0, wy;
+        const uint8_t *row_a, *row_b;
+        uint8_t *out;
+        if (py < -0.5 || py >= h - 0.5)
+            continue;
+        y0 = (int)floor(py);
+        wy = (int)((py - y0) * 256.0);
+        row_a = job->src + (size_t)FFMAX(y0, 0) * w * 4;
+        row_b = job->src + (size_t)FFMIN(y0 + 1, h - 1) * w * 4;
+        out = job->dst + ((size_t)y * w + job->x_from) * 4;
+        for (x = job->x_from; x < job->x_to; x++, out += 4) {
+            int k = x - job->x_from, wx = job->col_w[k], c;
+            if (!job->col_ok[k])
+                continue;
+            for (c = 0; c < 4; c++) {
+                int top = row_a[job->col_a[k] + c] * (256 - wx) + row_a[job->col_b[k] + c] * wx;
+                int bot = row_b[job->col_a[k] + c] * (256 - wx) + row_b[job->col_b[k] + c] * wx;
+                out[c] = (uint8_t)((top * (256 - wy) + bot * wy + 32768) >> 16);
+            }
+        }
+    }
+    return 0;
+}
+
+static void warp_rgba(AVFilterContext *ctx, const uint8_t *src, uint8_t *dst, int w, int h,
+                      const double corners[8])
 {
     double source[8], matrix[9];
     double lo_x = corners[0], hi_x = corners[0], lo_y = corners[1], hi_y = corners[1];
@@ -239,29 +285,16 @@ static void warp_rgba(const uint8_t *src, uint8_t *dst, int w, int h, const doub
             col_b[k] = FFMIN(x0 + 1, w - 1) * 4;
             col_w[k] = (int)((px - x0) * 256.0);
         }
-        for (y = y_from; y < y_to; y++) {
-            double py = matrix[4] * (y + 0.5) + matrix[5] - 0.5;
-            int y0, wy;
-            const uint8_t *row_a, *row_b;
-            uint8_t *out;
-            if (py < -0.5 || py >= h - 0.5)
-                continue;
-            y0 = (int)floor(py);
-            wy = (int)((py - y0) * 256.0);
-            row_a = src + (size_t)FFMAX(y0, 0) * w * 4;
-            row_b = src + (size_t)FFMIN(y0 + 1, h - 1) * w * 4;
-            out = dst + ((size_t)y * w + x_from) * 4;
-            for (x = x_from; x < x_to; x++, out += 4) {
-                int k = x - x_from, wx, c;
-                if (!col_ok[k])
-                    continue;
-                wx = col_w[k];
-                for (c = 0; c < 4; c++) {
-                    int top = row_a[col_a[k] + c] * (256 - wx) + row_a[col_b[k] + c] * wx;
-                    int bot = row_b[col_a[k] + c] * (256 - wx) + row_b[col_b[k] + c] * wx;
-                    out[c] = (uint8_t)((top * (256 - wy) + bot * wy + 32768) >> 16);
-                }
-            }
+        {
+            WarpJob job = {
+                .src = src, .dst = dst, .w = w, .h = h,
+                .x_from = x_from, .x_to = x_to, .y_from = y_from, .y_to = y_to,
+                .row_scale = matrix[4], .row_shift = matrix[5],
+                .col_a = col_a, .col_b = col_b, .col_w = col_w, .col_ok = col_ok,
+            };
+            /* Rows are independent, so each thread takes a band of them. */
+            ff_filter_execute(ctx, warp_rows, &job, NULL,
+                              FFMAX(1, FFMIN(y_to - y_from, ff_filter_get_nb_threads(ctx))));
         }
         return;
     }
@@ -849,12 +882,12 @@ static void squeeze_fields(NexEffectContext *s, const double corners[8])
     }
     for (y = 0; y < half; y++)
         memcpy(s->field_src + (size_t)y * stride, s->rgba + (size_t)(2 * y) * stride, stride);
-    warp_rgba(s->field_src, s->field_warp, w, half, field);
+    warp_rgba(s->self, s->field_src, s->field_warp, w, half, field);
     for (y = 0; y < half; y++)
         memcpy(s->warped + (size_t)(2 * y) * stride, s->field_warp + (size_t)y * stride, stride);
     for (y = 0; y < half; y++)
         memcpy(s->field_src + (size_t)y * stride, s->rgba + (size_t)(2 * y + 1) * stride, stride);
-    warp_rgba(s->field_src, s->field_warp, w, half, field);
+    warp_rgba(s->self, s->field_src, s->field_warp, w, half, field);
     for (y = 0; y < half; y++)
         memcpy(s->warped + (size_t)(2 * y + 1) * stride, s->field_warp + (size_t)y * stride, stride);
 }
@@ -869,6 +902,7 @@ static int config_input(AVFilterLink *inlink)
         return AVERROR(EINVAL);
     if (inlink->w < 2 || inlink->h < 2 || inlink->w > 2048 || inlink->h > 1088)
         return AVERROR(EINVAL);
+    s->self = ctx;
     s->width = inlink->w;
     s->height = inlink->h;
     if ((s->height & 1) && s->interlaced)
@@ -989,7 +1023,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     } else if (s->interlaced) {
         squeeze_fields(s, s->current);
     } else {
-        warp_rgba(s->rgba, s->warped, s->width, s->height, s->current);
+        warp_rgba(ctx, s->rgba, s->warped, s->width, s->height, s->current);
     }
     t2 = av_gettime_relative();
     composite(s->comp, s->warped, s->width, s->height, s);
@@ -1061,6 +1095,7 @@ const FFFilter ff_vf_nexeffect = {
     .p.name = "nexeffect",
     .p.description = NULL_IF_CONFIG_SMALL("nexencoder effect stack"),
     .p.priv_class = &nexeffect_class,
+    .p.flags = AVFILTER_FLAG_SLICE_THREADS,
     .priv_size = sizeof(NexEffectContext),
     .uninit = uninit,
     FILTER_INPUTS(inputs),

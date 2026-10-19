@@ -532,3 +532,10 @@ def test_rectangle_squeeze_has_an_integer_fast_path():
     assert "#define NX_MAXW 2048" in source
     assert "col_ok[NX_MAXW]" in source
     assert "(top * (256 - wy) + bot * wy + 32768) >> 16" in source
+
+
+def test_rectangle_squeeze_is_split_across_threads():
+    source = (Path(__file__).resolve().parent.parent / "nexencoder" / "vf_nexeffect.c").read_text(encoding="utf-8")
+    assert ".p.flags = AVFILTER_FLAG_SLICE_THREADS" in source
+    assert "ff_filter_execute(ctx, warp_rows" in source
+    assert "static int warp_rows(" in source
