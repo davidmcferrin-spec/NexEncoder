@@ -7,6 +7,7 @@ from nexencoder.cgfeed import (
     SlotWriter,
     chromium_argv,
     decode_png_bgra,
+    with_lower_priority,
     detect_html_backend,
     key_argv,
     ndi_argv,
@@ -83,9 +84,19 @@ def test_chromium_capture_keeps_a_transparent_background():
     argv = chromium_argv("chromium", 9222, "http://127.0.0.1:8788/cg/bug.html", 1280, 720)
     assert "--default-background-color=00000000" in argv
     assert "--disable-background-networking" in argv
+    assert "--disable-domain-reliability" in argv
+    assert any("PushMessaging" in item for item in argv)
     assert "--no-sandbox" in argv
     assert "--user-data-dir=/var/lib/nexencoder/chrome/9222" in argv
     assert "jpeg" not in " ".join(argv)
+
+
+def test_html_renderer_runs_below_the_capture():
+    argv = chromium_argv("google-chrome", 9223, "http://127.0.0.1/cg/bug.html", 1920, 1080)
+    demoted = with_lower_priority(argv, demote=True)
+    assert demoted[:3] == ["/usr/bin/nice", "-n", "10"]
+    assert demoted[3] == "google-chrome"
+    assert with_lower_priority(argv, demote=False)[0] == "google-chrome"
 
 
 def test_ndi_argv_names_the_source_and_requests_bgra():

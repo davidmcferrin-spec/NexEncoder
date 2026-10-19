@@ -214,6 +214,13 @@ def key_argv(format_code: str) -> list[str]:
     ]
 
 
+def with_lower_priority(argv: list[str], *, demote: bool) -> list[str]:
+    """Run a renderer below the capture so its startup cannot stall DeckLink."""
+    if demote:
+        return ["/usr/bin/nice", "-n", "10", *argv]
+    return list(argv)
+
+
 def chromium_argv(browser: str, port: int, url: str, width: int, height: int) -> list[str]:
     # The console service is root. Chrome refuses that sandbox, and each layer
     # needs its own profile or the second page loses the singleton lock.
@@ -223,7 +230,9 @@ def chromium_argv(browser: str, port: int, url: str, width: int, height: int) ->
         "--no-first-run", "--no-default-browser-check",
         "--disable-background-networking", "--disable-sync",
         "--disable-component-update", "--disable-default-apps", "--disable-breakpad",
-        "--disable-features=Translate,MediaRouter,OptimizationHints",
+        "--disable-domain-reliability",
+        "--disable-component-extensions-with-background-pages",
+        "--disable-features=Translate,MediaRouter,OptimizationHints,PushMessaging",
         "--force-device-scale-factor=1",
         "--default-background-color=00000000",
         f"--user-data-dir=/var/lib/nexencoder/chrome/{port}",
@@ -500,8 +509,13 @@ def run_chromium_feeder(
     # and the background services add load next to the capture.
     env = os.environ.copy()
     env["DBUS_SESSION_BUS_ADDRESS"] = "disabled:"
+    # nice is inherited by Chrome's children, so the whole startup stays
+    # behind the DeckLink capture. preexec_fn is unsafe in a threaded process.
     proc = spawn(
-        chromium_argv(browser, port, url, writer.width, writer.height),
+        with_lower_priority(
+            chromium_argv(browser, port, url, writer.width, writer.height),
+            demote=os.name == "posix" and os.path.isfile("/usr/bin/nice"),
+        ),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         env=env,

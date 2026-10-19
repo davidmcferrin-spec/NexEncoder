@@ -8,6 +8,10 @@ hls: false
 webrtc: true
 webrtcAddress: :8889
 webrtcLocalUDPAddress: :8189
+# A publisher that has just joined is quiet until the next keyframe.
+# The default 10s closed that RTSP session.
+readTimeout: 30s
+writeTimeout: 30s
 api: false
 
 paths:

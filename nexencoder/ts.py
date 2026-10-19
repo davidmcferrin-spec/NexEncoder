@@ -139,3 +139,149 @@ def extract_sections(data: bytes, pid: int) -> list[bytes]:
     for pkt in iter_packets(data):
         sections += ex.feed(pkt)
     return sections
+
+
+def packet_pid(pkt: bytes) -> int:
+    return ((pkt[1] & 0x1F) << 8) | pkt[2]
+
+
+def _payload(pkt: bytes) -> bytes:
+    afc = (pkt[3] >> 4) & 0x3
+    if afc == 1:
+        return pkt[4:]
+    if afc == 3 and len(pkt) > 4:
+        start = 5 + pkt[4]
+        if start <= TS_PACKET:
+            return pkt[start:]
+    return b""
+
+
+def _section(pkt: bytes) -> bytes | None:
+    """First section in a payload-unit-start packet, after the pointer field."""
+    if len(pkt) != TS_PACKET or pkt[0] != SYNC or not (pkt[1] & 0x40):
+        return None
+    payload = _payload(pkt)
+    if not payload:
+        return None
+    start = 1 + payload[0]
+    if start >= len(payload):
+        return None
+    return payload[start:]
+
+
+def pat_program_pid(pkt: bytes) -> int | None:
+    """PMT PID of the first real program in a PAT packet."""
+    sec = _section(pkt)
+    if sec is None or len(sec) < 12 or sec[0] != 0x00:
+        return None
+    limit = min(len(sec), 3 + (((sec[1] & 0x0F) << 8) | sec[2])) - 4
+    index = 8
+    while index + 4 <= limit:
+        program = (sec[index] << 8) | sec[index + 1]
+        pid = ((sec[index + 2] & 0x1F) << 8) | sec[index + 3]
+        if program != 0:
+            return pid
+        index += 4
+    return None
+
+
+def pmt_video_pid(pkt: bytes) -> int | None:
+    """Elementary PID of the H.264 stream in a PMT packet."""
+    sec = _section(pkt)
+    if sec is None or len(sec) < 16 or sec[0] != 0x02:
+        return None
+    limit = min(len(sec), 3 + (((sec[1] & 0x0F) << 8) | sec[2])) - 4
+    info = ((sec[10] & 0x0F) << 8) | sec[11]
+    index = 12 + info
+    while index + 5 <= limit:
+        stream_type = sec[index]
+        pid = ((sec[index + 1] & 0x1F) << 8) | sec[index + 2]
+        extra = ((sec[index + 3] & 0x0F) << 8) | sec[index + 4]
+        if stream_type == 0x1B:
+            return pid
+        index += 5 + extra
+    return None
+
+
+def is_random_access(pkt: bytes) -> bool:
+    """True when this packet begins a PES the muxer marked as a random access point."""
+    if len(pkt) < 6 or pkt[0] != SYNC or not (pkt[1] & 0x40):
+        return False
+    afc = (pkt[3] >> 4) & 0x3
+    if afc not in (2, 3) or pkt[4] < 1:
+        return False
+    return bool(pkt[5] & 0x40)
+
+
+def _has_sps(pkt: bytes) -> bool:
+    """True when the packet carries an H.264 sequence parameter set."""
+    start = 0
+    while True:
+        found = pkt.find(b"\x00\x00\x01", start)
+        if found < 0 or found + 3 >= len(pkt):
+            return False
+        if pkt[found + 3] & 0x1F == 7:
+            return True
+        start = found + 3
+
+
+class PreviewGate:
+    """Hold a program feed until the first video keyframe, then pass it through.
+
+    A decoder that starts on a predicted slice logs a missing parameter set
+    for every slice until the next IDR, and that burst is what drops the
+    RTSP session. The first bytes out are the cached PAT, the cached PMT,
+    and the keyframe packet, so the picture starts on a random access point.
+    """
+
+    def __init__(self) -> None:
+        self.opened = False
+        self._buf = b""
+        self._pat: bytes | None = None
+        self._pmt_pid: int | None = None
+        self._pmt: bytes | None = None
+        self._video_pid: int | None = None
+
+    def feed(self, data: bytes) -> bytes:
+        if not data:
+            return b""
+        self._buf += data
+        out = bytearray()
+        while len(self._buf) >= TS_PACKET:
+            if self._buf[0] != SYNC:
+                nxt = self._buf.find(bytes([SYNC]), 1)
+                if nxt < 0:
+                    self._buf = self._buf[-(TS_PACKET - 1):]
+                    break
+                self._buf = self._buf[nxt:]
+                continue
+            pkt = self._buf[:TS_PACKET]
+            self._buf = self._buf[TS_PACKET:]
+            out += self._consider(pkt)
+        return bytes(out)
+
+    def _consider(self, pkt: bytes) -> bytes:
+        pid = packet_pid(pkt)
+        if pid == 0:
+            found = pat_program_pid(pkt)
+            if found is not None:
+                self._pat = pkt
+                self._pmt_pid = found
+        elif self._pmt_pid is not None and pid == self._pmt_pid:
+            video = pmt_video_pid(pkt)
+            if video is not None:
+                self._pmt = pkt
+                self._video_pid = video
+        if self.opened:
+            return pkt
+        # A keyframe seen before the tables is not reused. Its continuation
+        # packets were dropped, so the next random access point is the start.
+        if self._pat is None or self._pmt is None or not self._is_start(pkt, pid):
+            return b""
+        self.opened = True
+        return self._pat + self._pmt + pkt
+
+    def _is_start(self, pkt: bytes, pid: int) -> bool:
+        if not (pkt[1] & 0x40) or self._video_pid is None or pid != self._video_pid:
+            return False
+        return is_random_access(pkt) or _has_sps(pkt)

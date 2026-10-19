@@ -2,8 +2,8 @@ import pytest
 
 from nexencoder.errors import ParseError
 from nexencoder.scte35 import SpliceInsert, build_section, parse_section
-from nexencoder.ts import (SectionExtractor, SectionPacketizer, TS_PACKET,
-                           extract_sections, iter_packets)
+from nexencoder.ts import (PreviewGate, SectionExtractor, SectionPacketizer,
+                           TS_PACKET, extract_sections, iter_packets)
 
 PID = 0x1F0
 
@@ -97,6 +97,69 @@ def test_adaptation_field_skipped():
     pkt = bytes([0x47, 0x40 | (PID >> 8), PID & 0xFF, 0x30]) + af + payload
     pkt += b"\xff" * (TS_PACKET - len(pkt))
     assert extract_sections(pkt, PID) == [sec]
+
+
+# PAT program 1 -> PMT 0x100. PMT: H.264 on 0x101, AAC on 0x102.
+_PAT = bytes([
+    0x00, 0xB0, 0x0D, 0x00, 0x01, 0xC1, 0x00, 0x00,
+    0x00, 0x01, 0xE1, 0x00, 0x00, 0x00, 0x00, 0x00,
+])
+_PMT = bytes([
+    0x02, 0xB0, 0x17, 0x00, 0x01, 0xC1, 0x00, 0x00,
+    0xE1, 0x01, 0xF0, 0x00,
+    0x1B, 0xE1, 0x01, 0xF0, 0x00,
+    0x0F, 0xE1, 0x02, 0xF0, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+])
+
+
+def _packet(pid: int, payload: bytes, *, pusi: bool = True, rai: bool = False, cc: int = 0) -> bytes:
+    body = (bytes([1, 0x40]) + payload) if rai else payload
+    raw = bytes([
+        0x47,
+        (0x40 if pusi else 0) | ((pid >> 8) & 0x1F),
+        pid & 0xFF,
+        (0x30 if rai else 0x10) | (cc & 0x0F),
+    ]) + body
+    assert len(raw) <= TS_PACKET
+    return raw + bytes(TS_PACKET - len(raw))
+
+
+def test_preview_gate_starts_at_the_video_keyframe():
+    pat = _packet(0, b"\x00" + _PAT)
+    pmt = _packet(0x100, b"\x00" + _PMT)
+    early = _packet(0x101, b"\x00\x00\x01\x41" + b"\x11" * 16, cc=1)
+    audio = _packet(0x102, b"\x22" * 16, rai=True)
+    key = _packet(0x101, b"\x00\x00\x00\x01\x67\x42" + b"\x33" * 16, rai=True, cc=2)
+    later = _packet(0x101, b"\x44" * 16, pusi=False, cc=3)
+    gate = PreviewGate()
+    assert gate.feed(early + audio) == b""
+    assert gate.opened is False
+    # A keyframe before the PMT is dropped; its continuation is already gone.
+    assert gate.feed(pat + key) == b""
+    out = gate.feed(pmt + early + audio + key + later)
+    assert out == pat + pmt + key + later
+    assert gate.opened is True
+    nxt = _packet(0x101, b"\x55" * 16, pusi=False, cc=4)
+    assert gate.feed(nxt) == nxt
+
+
+def test_preview_gate_accepts_an_sps_without_the_random_access_bit():
+    pat = _packet(0, b"\x00" + _PAT)
+    pmt = _packet(0x100, b"\x00" + _PMT)
+    key = _packet(0x101, b"\x00\x00\x00\x01\x67\x64" + b"\x66" * 8)
+    gate = PreviewGate()
+    assert gate.feed(pat + pmt + key) == pat + pmt + key
+
+
+def test_preview_gate_waits_for_a_whole_packet():
+    pat = _packet(0, b"\x00" + _PAT)
+    pmt = _packet(0x100, b"\x00" + _PMT)
+    key = _packet(0x101, b"\x00\x00\x00\x01\x67\x42" + b"\x77" * 8, rai=True)
+    blob = pat + pmt + key
+    gate = PreviewGate()
+    assert gate.feed(b"\xff" + blob[:40]) == b""
+    assert gate.feed(blob[40:]) == pat + pmt + key
 
 
 def test_bad_input_rejected():

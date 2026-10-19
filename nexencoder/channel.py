@@ -15,6 +15,7 @@ import os
 import queue
 import signal
 import socket
+import struct
 import subprocess
 import threading
 import time
@@ -46,6 +47,9 @@ from .livefeed import (
     watch_decklink_signal,
 )
 from .pipeline import (
+    FEED_ADDR,
+    FEED_LOCAL,
+    FEED_PORT,
     FEED_RCVBUF,
     STILL_FD,
     VANC_PORT,
@@ -58,6 +62,7 @@ from .pipeline import (
 from .signal import signal_mode
 from .srtstats import atomic_json, redact_secrets, start_srt_stats_reader, tsp_supports_srt_stats
 from .status import parse_ffmpeg_progress, progress_frame
+from .ts import PreviewGate
 from .vanc_feed import start_vanc_thread
 
 log = logging.getLogger("nexencoder.channel")
@@ -271,8 +276,8 @@ def _consume_still(read_fd: int, dest: Path) -> None:
         _keep_latest(pending, None)
 
 
-def widen_pipe(fd: int, size: int = STILL_PIPE_BYTES) -> None:
-    """Give the pipe room for one JPEG so one write cannot fill it."""
+def widen_pipe(fd: int, size: int = STILL_PIPE_BYTES, what: str = "still") -> None:
+    """Give the pipe room so one write cannot fill it and stall the writer."""
     try:
         import fcntl
     except ImportError:
@@ -283,7 +288,7 @@ def widen_pipe(fd: int, size: int = STILL_PIPE_BYTES) -> None:
     try:
         fcntl.fcntl(fd, flag, size)
     except OSError:
-        log.warning("still pipe was not widened")
+        log.warning("%s pipe was not widened", what)
 
 
 def _popen_with_progress(argv: list[str], dest: Path, stderr=None, still_path: Path | None = None) -> subprocess.Popen:
@@ -340,21 +345,130 @@ def _running(proc: subprocess.Popen | None) -> bool:
     return proc is not None and proc.poll() is None
 
 
+_PREVIEW_WAIT = ("non-existing PPS", "no frame!", "decode_slice_header error")
+
+
+def _join_program_feed(channel_id: str) -> socket.socket:
+    """Join the program multicast on loopback, sharing the port with SRT and HLS."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, FEED_RCVBUF)
+    except OSError:
+        log.warning("channel %s monitor could not raise its receive buffer", channel_id)
+    sock.bind(("", FEED_PORT[channel_id]))
+    membership = struct.pack("4s4s", socket.inet_aton(FEED_ADDR), socket.inet_aton(FEED_LOCAL))
+    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, membership)
+    sock.settimeout(0.5)
+    return sock
+
+
+def _close_stdin(proc) -> None:
+    stdin = getattr(proc, "stdin", None)
+    if stdin is None:
+        return
+    try:
+        stdin.close()
+    except OSError:
+        pass
+
+
+def _drain_preview(pipe, channel_id: str) -> None:
+    """Keep one waiting line. A slice before the keyframe is not a new fault."""
+    noted = False
+    try:
+        for raw in iter(pipe.readline, b""):
+            text = raw.decode("utf-8", "replace").strip()
+            if not text:
+                continue
+            if any(mark in text for mark in _PREVIEW_WAIT):
+                if not noted:
+                    log.warning("channel %s monitor is waiting for a keyframe", channel_id)
+                    noted = True
+                continue
+            log.warning("channel %s monitor %s", channel_id, text)
+    except OSError:
+        return
+
+
+def _feed_preview(channel_id: str, proc, stop: threading.Event) -> None:
+    """Write the program feed to the monitor, starting at a video keyframe."""
+    try:
+        sock = _join_program_feed(channel_id)
+    except OSError as exc:
+        log.warning("channel %s monitor could not join the program feed: %s", channel_id, exc)
+        _close_stdin(proc)
+        return
+    gate = PreviewGate()
+    waiting_noted = False
+    opened_noted = False
+    started = time.monotonic()
+    try:
+        stdin = getattr(proc, "stdin", None)
+        if stdin is not None:
+            try:
+                widen_pipe(stdin.fileno(), what="monitor")
+            except OSError:
+                pass
+        while proc.poll() is None and not stop.is_set():
+            try:
+                data = sock.recv(65535)
+            except TimeoutError:
+                data = b""
+            except OSError:
+                break
+            if data and stdin is not None:
+                out = gate.feed(data)
+                if out:
+                    try:
+                        stdin.write(out)
+                        stdin.flush()
+                    except OSError:
+                        break
+            if gate.opened:
+                if not opened_noted:
+                    log.info("channel %s monitor started at a keyframe", channel_id)
+                    opened_noted = True
+            elif not waiting_noted and time.monotonic() - started >= 2:
+                log.warning("channel %s monitor is waiting for a keyframe", channel_id)
+                waiting_noted = True
+    finally:
+        sock.close()
+        _close_stdin(proc)
+
+
 def run_preview(channel_id: str, stop: threading.Event, spawn, pause) -> None:
     """Publish the monitor from the program feed until stop is set.
 
     This process is not one of the encode children. When it exits, only
-    the monitor is started again. The SRT output keeps running.
+    the monitor is started again. The SRT output keeps running. Bytes reach
+    it only after a video keyframe, so a join does not decode a bare slice.
     """
     while not stop.is_set():
         try:
-            proc = spawn(preview_argv(channel_id))
+            proc = spawn(
+                preview_argv(channel_id, source="pipe:0"),
+                stdin=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
         except OSError as exc:
             log.warning("channel %s preview failed to start: %s", channel_id, exc)
             pause(1)
             continue
+        stderr = getattr(proc, "stderr", None)
+        if stderr is not None:
+            threading.Thread(
+                target=_drain_preview, args=(stderr, channel_id),
+                name="nexencoder-preview-log", daemon=True,
+            ).start()
+        if getattr(proc, "stdin", None) is not None:
+            threading.Thread(
+                target=_feed_preview, args=(channel_id, proc, stop),
+                name=f"nexencoder-preview-{channel_id}", daemon=True,
+            ).start()
         while proc.poll() is None and not stop.is_set():
             stop.wait(0.5)
+        _close_stdin(proc)
         if stop.is_set():
             _stop_children([proc], pause)
             return

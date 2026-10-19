@@ -1,5 +1,7 @@
 """Capture, splice, and delivery argv. Nothing here opens a DeckLink device."""
 
+import io
+import logging
 import os
 import subprocess
 import threading
@@ -10,6 +12,7 @@ from nexencoder import scte104 as s104
 from nexencoder.channel import (
     EXIT_CONFIG,
     _consume_still,
+    _drain_preview,
     clear_progress,
     ensure_udp_receive_buffer,
     note_progress,
@@ -102,6 +105,9 @@ def test_preview_decodes_the_program_feed():
     assert argv[argv.index("-pkt_size") + 1] == "1316"
     assert "libopus" in argv
     assert "yadif=" in argv[argv.index("-vf") + 1]
+    assert argv[argv.index("-analyzeduration") + 1] == "500000"
+    piped = preview_argv("A", source="pipe:0")
+    assert piped[piped.index("-i") + 1] == "pipe:0"
     other = preview_argv("B")
     assert other[other.index("-i") + 1].startswith("udp://239.255.1.1:19002?localaddr=127.0.0.1")
     assert other[-1] == "rtsp://127.0.0.1:8554/inputB"
@@ -111,8 +117,8 @@ def test_preview_exit_restarts_only_the_monitor():
     calls = []
     stop = threading.Event()
 
-    def spawn(argv, **_kwargs):
-        calls.append(argv)
+    def spawn(argv, **kwargs):
+        calls.append((argv, kwargs))
         return _Proc()
 
     def pause(_seconds):
@@ -121,8 +127,23 @@ def test_preview_exit_restarts_only_the_monitor():
 
     run_preview("A", stop, spawn, pause)
     assert len(calls) == 2
-    assert all(item[-1] == "rtsp://127.0.0.1:8554/inputA" for item in calls)
-    assert all("pipe:1" not in item for item in calls)
+    assert all(item[-1] == "rtsp://127.0.0.1:8554/inputA" for item, _kwargs in calls)
+    assert all("pipe:1" not in item for item, _kwargs in calls)
+    assert all(item[item.index("-i") + 1] == "pipe:0" for item, _kwargs in calls)
+    assert all(kwargs["stdin"] is subprocess.PIPE for _item, kwargs in calls)
+
+
+def test_preview_log_keeps_one_keyframe_line(caplog):
+    caplog.set_level(logging.WARNING)
+    _drain_preview(io.BytesIO(
+        b"non-existing PPS 0 referenced\n"
+        b"no frame!\n"
+        b"[rtsp @ 0x1] Connection timed out: Broken pipe\n"
+    ), "A")
+    text = [record.message for record in caplog.records]
+    assert text.count("channel A monitor is waiting for a keyframe") == 1
+    assert any("Broken pipe" in message for message in text)
+    assert not any("non-existing PPS" in message for message in text)
 
 
 def test_splice_and_srt_listener():

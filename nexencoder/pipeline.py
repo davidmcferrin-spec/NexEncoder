@@ -241,17 +241,23 @@ def clock_argv(
     ]
 
 
-def preview_argv(channel_id: str, ffmpeg: str = "ffmpeg") -> list[str]:
+def preview_argv(channel_id: str, ffmpeg: str = "ffmpeg", source: str | None = None) -> list[str]:
     """Decode the program feed and publish the monitor.
 
     Squeeze, graphics, bars, and the ident are already in this MPEG-TS,
     which is the stream SRT sends. Restarting this process does not
-    restart the program encode.
+    restart the program encode. The channel passes ``pipe:0`` and writes
+    that pipe only from the first video keyframe, so the decoder is not
+    handed slices that have no parameter sets.
     """
+    src = feed_url(channel_id) if source is None else source
     return [
         ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "warning",
         "-fflags", "+genpts+discardcorrupt",
-        "-f", "mpegts", "-i", feed_url(channel_id),
+        # The pipe already starts on a keyframe. Do not sit for the default
+        # five-second probe before the RTSP session opens.
+        "-analyzeduration", "500000", "-probesize", "500000",
+        "-f", "mpegts", "-i", src,
         "-map", "0:v:0", "-map", "0:a:0?",
         "-vf", _preview_filter(),
         "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
