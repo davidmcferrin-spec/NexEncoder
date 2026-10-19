@@ -49,7 +49,7 @@ header('X-Content-Type-Options: nosniff');
     <div class="page-head">
       <div>
         <h1>Monitor</h1>
-        <p class="lead">The program output, including squeeze, graphics, and bars. The player uses the MediaMTX WebRTC endpoint on port 8889.</p>
+        <p class="lead">The program output, including squeeze, graphics, and bars. Under each picture: mute, volume, and level meters for this browser. The player uses the MediaMTX WebRTC endpoint on port 8889.</p>
       </div>
     </div>
     <div class="preview-grid">
@@ -59,6 +59,28 @@ header('X-Content-Type-Options: nosniff');
           <video id="video-A" autoplay playsinline muted hidden></video>
           <span class="preview-wait" id="wait-A">Waiting for the proxy</span>
           <div class="preview-caption" id="caption-A">CC1 · waiting</div>
+        </div>
+        <div class="preview-listen">
+          <button type="button" class="preview-speaker is-muted" id="speaker-A" aria-pressed="false" aria-label="Unmute Input A" title="Unmute">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <path d="M4 9.5v5h3.2L12 19V5L7.2 9.5H4z" fill="currentColor"/>
+              <path class="speaker-wave" d="M15.5 9.2a4.2 4.2 0 010 5.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+              <path class="speaker-wave" d="M17.8 7a7.2 7.2 0 010 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+              <path class="speaker-slash" d="M5 5l14 14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+            </svg>
+          </button>
+          <input type="range" id="volume-A" min="0" max="100" step="1" value="20" aria-label="Input A volume">
+        </div>
+        <div class="preview-vu" id="vu-A" role="group" aria-label="Input A audio levels">
+          <div class="vu-row">
+            <span class="vu-name">L</span>
+            <div class="vu-track"><span class="vu-fill" id="vu-fill-A-L"></span><span class="vu-peak" id="vu-peak-A-L"></span></div>
+          </div>
+          <div class="vu-row">
+            <span class="vu-name">R</span>
+            <div class="vu-track"><span class="vu-fill" id="vu-fill-A-R"></span><span class="vu-peak" id="vu-peak-A-R"></span></div>
+          </div>
+          <div class="vu-scale" aria-hidden="true"><span>-60</span><span>-20</span><span>-12</span><span>0</span></div>
         </div>
         <div class="preview-meta">
           <span>SCTE-35</span>
@@ -72,6 +94,28 @@ header('X-Content-Type-Options: nosniff');
           <video id="video-B" autoplay playsinline muted hidden></video>
           <span class="preview-wait" id="wait-B">Waiting for the proxy</span>
           <div class="preview-caption" id="caption-B">CC1 · waiting</div>
+        </div>
+        <div class="preview-listen">
+          <button type="button" class="preview-speaker is-muted" id="speaker-B" aria-pressed="false" aria-label="Unmute Input B" title="Unmute">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <path d="M4 9.5v5h3.2L12 19V5L7.2 9.5H4z" fill="currentColor"/>
+              <path class="speaker-wave" d="M15.5 9.2a4.2 4.2 0 010 5.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+              <path class="speaker-wave" d="M17.8 7a7.2 7.2 0 010 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+              <path class="speaker-slash" d="M5 5l14 14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+            </svg>
+          </button>
+          <input type="range" id="volume-B" min="0" max="100" step="1" value="20" aria-label="Input B volume">
+        </div>
+        <div class="preview-vu" id="vu-B" role="group" aria-label="Input B audio levels">
+          <div class="vu-row">
+            <span class="vu-name">L</span>
+            <div class="vu-track"><span class="vu-fill" id="vu-fill-B-L"></span><span class="vu-peak" id="vu-peak-B-L"></span></div>
+          </div>
+          <div class="vu-row">
+            <span class="vu-name">R</span>
+            <div class="vu-track"><span class="vu-fill" id="vu-fill-B-R"></span><span class="vu-peak" id="vu-peak-B-R"></span></div>
+          </div>
+          <div class="vu-scale" aria-hidden="true"><span>-60</span><span>-20</span><span>-12</span><span>0</span></div>
         </div>
         <div class="preview-meta">
           <span>SCTE-35</span>

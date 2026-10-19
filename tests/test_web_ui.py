@@ -136,8 +136,16 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     monitor = (WEB / "monitor.php").read_text(encoding="utf-8")
     assert 'id="sideband-A"' in monitor and 'id="sideband-B"' in monitor
     assert 'id="sideband-log"' not in monitor
+    assert 'id="speaker-A"' in monitor and 'id="speaker-B"' in monitor
+    assert 'id="volume-A"' in monitor and 'id="volume-B"' in monitor
+    assert 'id="vu-A"' in monitor and 'id="vu-B"' in monitor
+    assert monitor.index('id="volume-A"') < monitor.index('id="vu-A"')
+    assert monitor.index('id="volume-B"') < monitor.index('id="vu-B"')
     assert 'getElementById("sideband-"' in preview
     assert "track.onended" in preview and "players[id] !== pc" in preview
+    assert "createMediaStreamSource" in preview
+    assert "nexencoder-audio-muted-" in preview and "nexencoder-audio-volume-" in preview
+    assert "video.muted = true" in preview
     inputs = (WEB / "inputs.php").read_text(encoding="utf-8")
     assert 'id="lock-A"' in inputs and 'id="lock-B"' in inputs
     assert 'id="restart-A"' in inputs and 'id="restart-B"' in inputs
@@ -146,5 +154,11 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     metrics = (WEB / "assets" / "metrics.js").read_text(encoding="utf-8")
     assert "/api/" not in metrics
     assert "Field rate" in metrics and "Raster" in metrics
+    assert "query_range" in metrics and "nexencoder_input_up" in metrics
+    assert "Host uptime" in metrics
+    metrics_page = (WEB / "metrics.php").read_text(encoding="utf-8")
+    assert 'id="chart-grid"' in metrics_page and 'id="lock-timeline"' in metrics_page
+    assert 'id="host-uptime"' in metrics_page and 'data-range="24h"' in metrics_page
+    assert 'id="auto-refresh"' in metrics_page and 'id="from-dt"' in metrics_page
     assert "color-scheme: normal" in (WEB / "assets" / "encoder.css").read_text(encoding="utf-8")
     assert "color-scheme: normal" in (WEB / "cg" / "bug.html").read_text(encoding="utf-8")

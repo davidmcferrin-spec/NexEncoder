@@ -539,3 +539,11 @@ def test_rectangle_squeeze_is_split_across_threads():
     assert ".p.flags = AVFILTER_FLAG_SLICE_THREADS" in source
     assert "ff_filter_execute(ctx, warp_rows" in source
     assert "static int warp_rows(" in source
+
+
+def test_compositing_is_split_across_threads_in_bands_of_rows():
+    source = (Path(__file__).resolve().parent.parent / "nexencoder" / "vf_nexeffect.c").read_text(encoding="utf-8")
+    assert "static int composite_rows(" in source
+    assert "ff_filter_execute(s->self, composite_rows" in source
+    # Layers are fetched before the threads start; the workers only blend.
+    assert source.index("layer = slot_frame(s, index, w, h);") < source.index("ff_filter_execute(s->self, composite_rows")

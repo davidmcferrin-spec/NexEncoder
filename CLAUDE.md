@@ -41,7 +41,7 @@ to SCTE-35) and shown on a low-latency WebRTC proxy preview via MediaMTX.
   pinned TSDuck 3.45-4798, and the pinned MediaMTX binary. No pip, no venv. TSDuck is
   downloaded from the official release when `tsp` is not already on PATH.
   Desktop Video and the DeckLink SDK are installed from archives in `/home/nexstar`, not downloaded. Channel units restart forever; a stalled frame count restarts the pipeline.
-- Preview: MediaMTX. A separate ffmpeg decodes the program multicast feed and publishes RTSP to `127.0.0.1:8554`; the monitor page plays WHEP. That picture is the SRT output, including squeeze, graphics, and bars. The preview process restarts on its own and does not restart the channel.
+- Preview: MediaMTX. A separate ffmpeg decodes the program multicast feed and publishes RTSP to `127.0.0.1:8554`; the monitor page plays WHEP. That picture is the SRT output, including squeeze, graphics, and bars. The page can play the preview audio in the browser, with a mute button, volume slider, and horizontal level meters under each picture. The preview process restarts on its own and does not restart the channel.
 
 ## Hardware (see README "Target hardware")
 - Host: Dell R440+ or Minisforum MS-01 (low-profile cards only). Card: DeckLink Duo 2 Mini or

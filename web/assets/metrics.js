@@ -1,15 +1,31 @@
 (function () {
   "use strict";
 
-  var WINDOW_MS = 15 * 60 * 1000;
+  var RANGES = { "15m": 15 * 60 * 1000, "1h": 60 * 60 * 1000, "6h": 6 * 60 * 60 * 1000, "24h": 24 * 60 * 60 * 1000 };
+  var RANGE_NOTE = {
+    "15m": "Last 15 minutes",
+    "1h": "Last hour",
+    "6h": "Last 6 hours",
+    "24h": "Last 24 hours"
+  };
+  var MAX_CUSTOM_MS = 7 * 24 * 60 * 60 * 1000;
   var PALETTE = ["#2563eb", "#3ecf8e", "#f5a524", "#f87171", "#7c5cbf", "#0b7ea4"];
+  var AUTO_KEY = "nexencoder-metrics-auto";
   var history = {};
   var cards = [];
   var promUp = false;
   var selectedName = "";
   var names = [];
-
   var lastLocal = [];
+  var lastRendered = {};
+  var lastExplorer = null;
+  var range = "15m";
+  var customFrom = null;
+  var customTo = null;
+  var localTimer = null;
+  var promTimer = null;
+  var promBusy = false;
+  var promAgain = false;
 
   function $(id) { return document.getElementById(id); }
 
@@ -17,6 +33,50 @@
     return String(text).replace(/[&<>"']/g, function (ch) {
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
     });
+  }
+
+  function autoPref() {
+    try {
+      var raw = localStorage.getItem(AUTO_KEY);
+      if (raw === null || raw === "") return true;
+      return raw === "1";
+    } catch (err) {
+      return true;
+    }
+  }
+
+  function windowBounds() {
+    if (customFrom != null && customTo != null) return { start: customFrom, end: customTo };
+    var span = RANGES[range] || RANGES["15m"];
+    var end = Date.now();
+    return { start: end - span, end: end };
+  }
+
+  function inWindow(stamp) {
+    var bounds = windowBounds();
+    return stamp >= bounds.start && stamp <= bounds.end + 5000;
+  }
+
+  function stepSeconds(spanMs) {
+    var step = Math.max(15, Math.round(spanMs / 1000 / 400));
+    var choices = [15, 30, 60, 120, 300, 600, 900];
+    for (var i = 0; i < choices.length; i++) {
+      if (choices[i] >= step) return choices[i];
+    }
+    return 900;
+  }
+
+  function rangeNote() {
+    if (customFrom != null && customTo != null) return fmtAxis(customFrom) + " – " + fmtAxis(customTo);
+    return RANGE_NOTE[range] || RANGE_NOTE["15m"];
+  }
+
+  function fmtAxis(ms) {
+    var when = new Date(ms);
+    var bounds = windowBounds();
+    var sameDay = when.toDateString() === new Date().toDateString() && (bounds.end - bounds.start) < 36 * 60 * 60 * 1000;
+    if (sameDay) return when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return when.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   }
 
   function labelText(labels) {
@@ -32,22 +92,46 @@
     return name + "\n" + keys.map(function (key) { return key + "=" + labels[key]; }).join(",");
   }
 
+  function parseKey(key) {
+    var parts = key.split("\n");
+    var labels = {};
+    (parts[1] || "").split(",").forEach(function (part) {
+      if (!part) return;
+      var eq = part.indexOf("=");
+      if (eq === -1) return;
+      labels[part.slice(0, eq)] = part.slice(eq + 1);
+    });
+    return { name: parts[0], labels: labels };
+  }
+
   function remember(name, labels, value, time) {
     if (!isFinite(value)) return;
+    var stamp = time || Date.now();
+    if (!inWindow(stamp)) return;
     var key = seriesKey(name, labels);
     var points = history[key] || (history[key] = []);
-    var stamp = time || Date.now();
     var last = points[points.length - 1];
     if (last && Math.abs(last.t - stamp) < 1000) last.v = value;
     else points.push({ t: stamp, v: value });
-    var cutoff = Date.now() - WINDOW_MS;
-    while (points.length && points[0].t < cutoff) points.shift();
+    trim(points);
+  }
+
+  function trim(points) {
+    var bounds = windowBounds();
+    while (points.length && points[0].t < bounds.start) points.shift();
+    while (points.length && points[points.length - 1].t > bounds.end + 5000) points.pop();
   }
 
   function replaceSeries(name, labels, points) {
-    history[seriesKey(name, labels)] = points.filter(function (point) {
-      return isFinite(point.v) && Date.now() - point.t <= WINDOW_MS;
+    var key = seriesKey(name, labels);
+    var incoming = points.filter(function (point) {
+      return isFinite(point.v) && inWindow(point.t);
     });
+    var newest = incoming.length ? incoming[incoming.length - 1].t : 0;
+    var extra = (history[key] || []).filter(function (point) {
+      return point.t > newest && inWindow(point.t);
+    });
+    history[key] = incoming.concat(extra);
   }
 
   function pointsFor(name, labels) {
@@ -79,6 +163,7 @@
     if (card.kind === "percent") return value.toFixed(1) + "%";
     if (card.kind === "duration") return formatDuration(value);
     if (card.unit === "bps") return (value / 1e6).toFixed(2) + " Mbps";
+    if (card.unit === "s") return value.toFixed(3) + " s";
     if (Math.abs(value) >= 100) return String(Math.round(value));
     if (Number.isInteger(value)) return String(value);
     return String(Math.round(value * 1000) / 1000);
@@ -104,9 +189,13 @@
     return out;
   }
 
+  function isChart(card) {
+    return card.kind !== "info" && card.id !== "uptime" && card.id !== "input-up";
+  }
+
   function draw(canvas, series, kind) {
     var width = canvas.clientWidth || 280;
-    var height = 120;
+    var height = canvas.clientHeight || 240;
     var dpr = window.devicePixelRatio || 1;
     canvas.width = Math.round(width * dpr);
     canvas.height = Math.round(height * dpr);
@@ -120,18 +209,17 @@
       return { label: item.label, points: pts };
     }).filter(function (item) { return item.points.length; });
     if (!plotted.length) return false;
+    var bounds = windowBounds();
+    var minT = bounds.start;
+    var maxT = bounds.end;
     var minV = kind === "percent" ? 0 : Infinity;
     var maxV = kind === "percent" ? 100 : -Infinity;
-    var minT = Infinity;
-    var maxT = -Infinity;
     plotted.forEach(function (item) {
       item.points.forEach(function (point) {
         if (kind !== "percent") {
           if (point.v < minV) minV = point.v;
           if (point.v > maxV) maxV = point.v;
         }
-        if (point.t < minT) minT = point.t;
-        if (point.t > maxT) maxT = point.t;
       });
     });
     if (kind !== "percent") {
@@ -145,26 +233,35 @@
     }
     if (maxT === minT) maxT = minT + 1000;
     var line = styles.getPropertyValue("--nx-line").trim() || "#e5e7eb";
+    var muted = styles.getPropertyValue("--nx-muted").trim() || "#667085";
     ctx.strokeStyle = line;
     ctx.lineWidth = 1;
+    ctx.fillStyle = muted;
+    ctx.font = "11px ui-monospace, Consolas, monospace";
     for (var g = 1; g <= 3; g++) {
-      var y = 8 + ((height - 16) * g) / 4;
+      var y = 16 + ((height - 36) * g) / 4;
       ctx.beginPath();
       ctx.moveTo(8, y);
       ctx.lineTo(width - 8, y);
       ctx.stroke();
     }
+    ctx.fillText(fmtAxis(minT), 8, height - 6);
+    var endLabel = fmtAxis(maxT);
+    ctx.fillText(endLabel, Math.max(8, width - 8 - ctx.measureText(endLabel).width), height - 6);
     plotted.forEach(function (item, index) {
       ctx.beginPath();
       ctx.strokeStyle = PALETTE[index % PALETTE.length];
       ctx.lineWidth = 1.75;
-      item.points.forEach(function (point, i) {
+      var moved = false;
+      item.points.forEach(function (point) {
         var x = 8 + ((point.t - minT) / (maxT - minT)) * (width - 16);
-        var yv = 8 + (1 - (point.v - minV) / (maxV - minV)) * (height - 16);
-        if (i === 0) ctx.moveTo(x, yv);
-        else ctx.lineTo(x, yv);
+        var yv = 8 + (1 - (point.v - minV) / (maxV - minV)) * (height - 28);
+        if (!moved) {
+          ctx.moveTo(x, yv);
+          moved = true;
+        } else ctx.lineTo(x, yv);
       });
-      ctx.stroke();
+      if (moved) ctx.stroke();
     });
     return true;
   }
@@ -200,19 +297,9 @@
   }
 
   function renderCard(card, samples) {
+    lastRendered[card.id] = samples;
     var value = document.querySelector('[data-value="' + card.id + '"]');
     var canvas = document.querySelector('[data-canvas="' + card.id + '"]');
-    if (card.kind === "info") {
-      var host = document.querySelector('[data-info="' + card.id + '"]');
-      if (!samples.length) {
-        host.innerHTML = '<p class="muted">No samples yet</p>';
-        return;
-      }
-      host.innerHTML = samples.map(function (sample) {
-        return infoList(sample.labels);
-      }).join("");
-      return;
-    }
     if (!samples.length) {
       if (value) value.textContent = "—";
       cardNote(card, card.group === "host" && !promUp ? "Waiting for Prometheus" : "No samples yet");
@@ -223,46 +310,169 @@
       return { label: labelText(sample.labels), points: pointsFor(sample.name, sample.labels) };
     });
     if (value) {
+      var live = inWindow(Date.now());
       value.textContent = samples.map(function (sample) {
+        var points = pointsFor(sample.name, sample.labels);
+        var shownValue = !live && points.length ? points[points.length - 1].v : sample.value;
         var prefix = Object.keys(sample.labels).length ? labelText(sample.labels) + " " : "";
-        return prefix + formatNumber(sample.value, card);
+        return prefix + formatNumber(shownValue, card);
       }).join(" · ");
     }
     var drew = canvas ? draw(canvas, series, card.kind) : false;
-    cardNote(card, drew ? (card.kind === "counter" ? "Rate per second, last 15 minutes" : "Last 15 minutes") : "Waiting for a second sample");
+    var note = card.kind === "counter" ? "Rate per second · " + rangeNote() : rangeNote();
+    cardNote(card, drew ? note : "Waiting for a second sample");
+  }
+
+  function renderUptime(samples) {
+    var el = $("host-uptime");
+    if (!el) return;
+    var value = samples.length ? samples[0].value : null;
+    if (!isFinite(value)) {
+      el.innerHTML = "Host uptime: <strong>unavailable</strong>";
+      return;
+    }
+    el.innerHTML = "Host uptime: <strong>" + formatDuration(value) + "</strong>";
+  }
+
+  function renderLock() {
+    var wrap = $("lock-timeline");
+    var empty = $("lock-empty");
+    if (!wrap) return;
+    var bounds = windowBounds();
+    var span = Math.max(1, bounds.end - bounds.start);
+    var groups = {};
+    Object.keys(history).forEach(function (key) {
+      var parsed = parseKey(key);
+      if (parsed.name !== "nexencoder_input_up") return;
+      var input = parsed.labels.input || "input";
+      groups[input] = history[key];
+    });
+    var keys = Object.keys(groups).sort();
+    wrap.innerHTML = "";
+    if (!keys.length) {
+      if (empty) empty.hidden = false;
+      return;
+    }
+    if (empty) empty.hidden = true;
+    keys.forEach(function (input) {
+      var points = groups[input].slice().sort(function (a, b) { return a.t - b.t; });
+      var deltas = [];
+      for (var i = 1; i < points.length; i++) deltas.push((points[i].t - points[i - 1].t) / 1000);
+      deltas.sort(function (a, b) { return a - b; });
+      var median = deltas.length ? deltas[Math.floor(deltas.length / 2)] : 15;
+      var gapMs = Math.max(60, median * 3) * 1000;
+      var segs = [];
+      points.forEach(function (point) {
+        var state = point.v >= 0.5 ? "locked" : "unlocked";
+        var endMs = point.t + gapMs;
+        var prev = segs[segs.length - 1];
+        if (prev && prev.state === state && point.t - prev.rawEnd <= gapMs) {
+          prev.rawEnd = point.t;
+          prev.end = endMs;
+        } else {
+          if (prev) prev.end = Math.min(prev.end, point.t);
+          segs.push({ state: state, start: point.t, rawEnd: point.t, end: endMs });
+        }
+      });
+      if (segs.length) segs[segs.length - 1].end = Math.min(segs[segs.length - 1].end, bounds.end);
+      var row = document.createElement("div");
+      row.className = "lock-row";
+      var label = document.createElement("span");
+      label.className = "lock-label";
+      label.textContent = "Input " + input;
+      var strip = document.createElement("div");
+      strip.className = "lock-strip";
+      segs.forEach(function (seg) {
+        var el = document.createElement("span");
+        el.className = "lock-seg " + seg.state;
+        var left = Math.max(0, (seg.start - bounds.start) / span * 100);
+        var width = Math.max(0.15, (seg.end - seg.start) / span * 100);
+        el.style.left = left.toFixed(3) + "%";
+        el.style.width = Math.min(width, 100 - left).toFixed(3) + "%";
+        el.title = seg.state + "\n" + fmtAxis(seg.start) + " – " + fmtAxis(seg.end);
+        strip.appendChild(el);
+      });
+      row.appendChild(label);
+      row.appendChild(strip);
+      wrap.appendChild(row);
+    });
+    var axis = document.createElement("div");
+    axis.className = "lock-axis";
+    var start = document.createElement("span");
+    start.textContent = fmtAxis(bounds.start);
+    var end = document.createElement("span");
+    end.textContent = fmtAxis(bounds.end);
+    axis.appendChild(start);
+    axis.appendChild(end);
+    wrap.appendChild(axis);
+  }
+
+  function channelLabels(samples, name, key) {
+    var found = {};
+    samples.forEach(function (sample) {
+      if (sample.name !== name) return;
+      var id = sample.labels[key] || "";
+      if (id) found[id] = sample.labels;
+    });
+    return found;
+  }
+
+  function cell(labels, key) {
+    if (!labels || labels[key] == null || labels[key] === "") return "—";
+    return infoValue(key, labels[key]);
+  }
+
+  function renderInfo(samples) {
+    var host = $("info-table");
+    if (!host) return;
+    var inputs = channelLabels(samples, "nexencoder_input_info", "input");
+    var outputs = channelLabels(samples, "nexencoder_output_info", "output");
+    var ids = {};
+    Object.keys(inputs).forEach(function (id) { ids[id] = true; });
+    Object.keys(outputs).forEach(function (id) { ids[id] = true; });
+    var keys = Object.keys(ids).sort();
+    if (!keys.length) {
+      host.innerHTML = '<p class="muted">No samples yet</p>';
+      return;
+    }
+    var rows = keys.map(function (id) {
+      var input = inputs[id] || {};
+      var output = outputs[id] || {};
+      return "<tr><td>" + esc(id) + "</td><td>" + esc(cell(input, "format")) + "</td><td>"
+        + esc(cell(input, "scan")) + "</td><td>" + esc(cell(input, "audio")) + "</td><td>"
+        + esc(cell(input, "raster")) + "</td><td>" + esc(cell(input, "field_rate_hz")) + "</td><td>"
+        + esc(cell(output, "mode")) + "</td></tr>";
+    }).join("");
+    host.innerHTML = '<table class="metrics-table"><thead><tr><th>Channel</th><th>Format</th><th>Scan</th><th>Audio</th><th>Raster</th><th>Field rate</th><th>Delivery</th></tr></thead><tbody>'
+      + rows + "</tbody></table>";
   }
 
   function buildCards() {
-    ["host", "encoder"].forEach(function (group) {
-      var root = $(group + "-charts");
-      root.innerHTML = "";
-      cards.filter(function (card) { return card.group === group; }).forEach(function (card) {
-        var article = document.createElement("article");
-        article.className = "panel chart-card";
-        var title = document.createElement("h2");
-        title.textContent = card.title;
-        article.appendChild(title);
-        if (card.kind === "info") {
-          var info = document.createElement("div");
-          info.setAttribute("data-info", card.id);
-          article.appendChild(info);
-        } else {
-          var value = document.createElement("div");
-          value.className = "chart-value";
-          value.setAttribute("data-value", card.id);
-          value.textContent = "—";
-          var canvas = document.createElement("canvas");
-          canvas.setAttribute("data-canvas", card.id);
-          canvas.setAttribute("aria-label", card.title + " chart");
-          article.appendChild(value);
-          article.appendChild(canvas);
-        }
-        var note = document.createElement("p");
-        note.className = "muted chart-note";
-        note.setAttribute("data-note", card.id);
-        article.appendChild(note);
-        root.appendChild(article);
-      });
+    var root = $("chart-grid");
+    root.innerHTML = "";
+    cards.filter(isChart).forEach(function (card) {
+      var article = document.createElement("article");
+      article.className = "panel chart-card";
+      var head = document.createElement("div");
+      head.className = "chart-head";
+      var title = document.createElement("h2");
+      title.textContent = card.title;
+      var value = document.createElement("div");
+      value.className = "chart-value";
+      value.setAttribute("data-value", card.id);
+      value.textContent = "—";
+      head.appendChild(title);
+      head.appendChild(value);
+      var canvas = document.createElement("canvas");
+      canvas.setAttribute("data-canvas", card.id);
+      canvas.setAttribute("aria-label", card.title + " chart");
+      var note = document.createElement("p");
+      note.className = "muted chart-note";
+      note.setAttribute("data-note", card.id);
+      article.appendChild(head);
+      article.appendChild(canvas);
+      article.appendChild(note);
+      root.appendChild(article);
     });
   }
 
@@ -280,10 +490,13 @@
 
   function promGet(kind, query) {
     var url = kind === "range"
-      ? "/live/prom.php?kind=query_range&query=" + encodeURIComponent(query)
-        + "&start=" + ((Date.now() - WINDOW_MS) / 1000)
-        + "&end=" + (Date.now() / 1000)
-        + "&step=15"
+      ? (function () {
+        var bounds = windowBounds();
+        return "/live/prom.php?kind=query_range&query=" + encodeURIComponent(query)
+          + "&start=" + (bounds.start / 1000)
+          + "&end=" + (bounds.end / 1000)
+          + "&step=" + stepSeconds(bounds.end - bounds.start);
+      }())
       : "/live/prom.php?kind=query&query=" + encodeURIComponent(query);
     return fetch(url).then(function (response) { return response.json(); });
   }
@@ -309,38 +522,41 @@
     return samples;
   }
 
-  function refreshHost(card) {
+  function showCard(card, samples) {
+    if (card.id === "uptime") renderUptime(samples);
+    else if (card.id === "input-up") renderLock();
+    else if (isChart(card)) renderCard(card, samples);
+  }
+
+  function refreshCard(card) {
     var queries = queriesFor(card);
     var attempt = 0;
     function next() {
       if (attempt >= queries.length) {
-        renderCard(card, []);
+        showCard(card, []);
         if (card.id === "gpu") cardNote(card, promUp ? "No GPU exporter is reporting" : "Waiting for Prometheus");
-        return;
+        return Promise.resolve();
       }
-      promGet("range", queries[attempt]).then(function (payload) {
+      return promGet("range", queries[attempt]).then(function (payload) {
         if (payload && payload.ok === false) {
           promUp = false;
           setProm(false, payload.detail);
-          renderCard(card, []);
+          showCard(card, []);
           return;
         }
         var rows = matrix(payload);
         attempt += 1;
-        if (!rows || !rows.length || !rows.some(function (row) { return row.points.length; })) {
-          next();
-          return;
-        }
+        if (!rows || !rows.length || !rows.some(function (row) { return row.points.length; })) return next();
         promUp = true;
         setProm(true, "");
-        renderCard(card, applyMatrix(card, rows, true));
+        showCard(card, applyMatrix(card, rows, true));
       }).catch(function () {
         promUp = false;
         setProm(false, "Prometheus is not reachable");
-        renderCard(card, []);
+        showCard(card, []);
       });
     }
-    next();
+    return next();
   }
 
   function refreshEncoder(samples) {
@@ -349,9 +565,16 @@
       remember(sample.name, sample.labels, sample.value);
       (byName[sample.name] || (byName[sample.name] = [])).push(sample);
     });
-    cards.filter(function (card) { return card.group === "encoder"; }).forEach(function (card) {
-      renderCard(card, byName[card.query] || []);
+    cards.filter(function (card) { return card.group === "encoder" && isChart(card); }).forEach(function (card) {
+      var rows = byName[card.query] || [];
+      if (!rows.length && promUp) {
+        var kept = Object.keys(history).some(function (key) { return key.split("\n")[0] === card.query; });
+        if (kept) return;
+      }
+      renderCard(card, rows);
     });
+    renderInfo(samples);
+    renderLock();
   }
 
   function setProm(up, detail) {
@@ -367,16 +590,16 @@
     badge.textContent = "Prometheus offline";
     banner.hidden = false;
     banner.textContent = (detail || "Prometheus is not reachable")
-      + ". Host charts use node_exporter through Prometheus. Encoder series below keep updating from this console.";
+      + ". Host charts use node_exporter through Prometheus. Encoder charts keep updating from this console.";
   }
 
   function renderNames() {
     var filter = ($("series-filter").value || "").toLowerCase();
     var list = $("series-list");
-    var shown = names.filter(function (name) { return !filter || name.toLowerCase().indexOf(filter) !== -1; });
-    $("series-count").textContent = shown.length + " of " + names.length;
+    var shownNames = names.filter(function (name) { return !filter || name.toLowerCase().indexOf(filter) !== -1; });
+    $("series-count").textContent = shownNames.length + " of " + names.length;
     list.innerHTML = "";
-    shown.slice(0, 400).forEach(function (name) {
+    shownNames.slice(0, 400).forEach(function (name) {
       var button = document.createElement("button");
       button.type = "button";
       button.className = "btn btn-secondary btn-sm" + (name === selectedName ? " is-selected" : "");
@@ -397,11 +620,11 @@
     if (!selectedName) {
       meta.textContent = "Select a series to chart it.";
       info.innerHTML = "";
+      lastExplorer = null;
       return;
     }
     var query = /_total$/.test(selectedName) ? "rate(" + selectedName + "[1m])" : selectedName;
-    var kind = /_total$/.test(selectedName) ? "gauge" : "gauge";
-    meta.textContent = query;
+    meta.textContent = query + " · " + rangeNote();
     if (/_info$/.test(selectedName)) {
       promGet("instant", selectedName).then(function (payload) {
         var rows = matrix(payload) || [];
@@ -420,7 +643,8 @@
         return;
       }
       var series = rows.map(function (row) { return { label: labelText(row.labels), points: row.points }; });
-      draw(canvas, series, kind);
+      lastExplorer = { series: series, kind: "gauge" };
+      draw(canvas, series, "gauge");
       if (!series.length) meta.textContent = query + " — no samples yet";
     }).catch(function () {
       meta.textContent = "Prometheus is not reachable";
@@ -440,7 +664,7 @@
     });
   }
 
-  function tick() {
+  function tickLocal() {
     fetch("/live/metrics.php").then(function (response) { return response.text(); }).then(function (text) {
       var samples = parseExposition(text);
       refreshEncoder(samples);
@@ -463,19 +687,119 @@
     }).catch(function () {
       setProm(false, "The console metrics endpoint did not answer");
     });
-    cards.filter(function (card) { return card.group === "host"; }).forEach(refreshHost);
+  }
+
+  function tickProm() {
+    if (promBusy) {
+      promAgain = true;
+      return;
+    }
+    promBusy = true;
+    promAgain = false;
+    Promise.all(cards.filter(function (card) { return card.kind !== "info"; }).map(refreshCard)).then(function () {
+      promBusy = false;
+      renderLock();
+      if (promAgain) tickProm();
+    }, function () {
+      promBusy = false;
+      if (promAgain) tickProm();
+    });
     if (selectedName) refreshExplorer();
   }
+
+  function setRangeNote(text) {
+    var note = $("range-note");
+    if (note) note.textContent = text || "";
+  }
+
+  function selectPreset(next) {
+    range = next;
+    customFrom = null;
+    customTo = null;
+    $("from-dt").value = "";
+    $("to-dt").value = "";
+    document.querySelectorAll("button.range").forEach(function (button) {
+      button.classList.toggle("is-selected", button.dataset.range === range);
+    });
+    setRangeNote("");
+    Object.keys(history).forEach(function (key) { trim(history[key]); });
+    tickLocal();
+    tickProm();
+  }
+
+  function arm() {
+    if (localTimer) clearInterval(localTimer);
+    if (promTimer) clearInterval(promTimer);
+    localTimer = null;
+    promTimer = null;
+    if (!$("auto-refresh").checked) return;
+    localTimer = setInterval(tickLocal, 2000);
+    promTimer = setInterval(tickProm, 15000);
+  }
+
+  function fromDatetimeLocal(value) {
+    if (!value) return null;
+    var ms = Date.parse(value);
+    return isFinite(ms) ? ms : null;
+  }
+
+  var autoBox = $("auto-refresh");
+  if (autoBox) autoBox.checked = autoPref();
 
   fetch("/admin/catalog.php").then(function (response) { return response.json(); }).then(function (payload) {
     cards = payload.cards || [];
     buildCards();
-    tick();
-    setInterval(tick, 2000);
+    tickLocal();
+    tickProm();
+    arm();
     setInterval(function () { refreshNames(lastLocal); }, 15000);
   }).catch(function () {
     setProm(false, "The console catalog did not answer");
   });
 
   $("series-filter").addEventListener("input", renderNames);
+  document.querySelectorAll("button.range").forEach(function (button) {
+    button.addEventListener("click", function () { selectPreset(button.dataset.range); });
+  });
+  $("range-apply").addEventListener("click", function () {
+    var from = fromDatetimeLocal($("from-dt").value);
+    var to = fromDatetimeLocal($("to-dt").value);
+    if (from == null || to == null) {
+      setRangeNote("Set both from and to");
+      return;
+    }
+    if (from >= to) {
+      setRangeNote("From must be earlier than to");
+      return;
+    }
+    if ((to - from) > MAX_CUSTOM_MS) {
+      setRangeNote("Custom window must be at most 7 days");
+      return;
+    }
+    customFrom = from;
+    customTo = to;
+    document.querySelectorAll("button.range").forEach(function (button) { button.classList.remove("is-selected"); });
+    setRangeNote("");
+    Object.keys(history).forEach(function (key) { trim(history[key]); });
+    tickLocal();
+    tickProm();
+  });
+  $("range-clear").addEventListener("click", function () {
+    if (!RANGES[range]) range = "15m";
+    selectPreset(range);
+  });
+  $("auto-refresh").addEventListener("change", function () {
+    try { localStorage.setItem(AUTO_KEY, autoBox.checked ? "1" : "0"); } catch (err) { /* private mode */ }
+    arm();
+    if (autoBox.checked) {
+      tickLocal();
+      tickProm();
+    }
+  });
+  window.addEventListener("resize", function () {
+    cards.filter(isChart).forEach(function (card) {
+      if (lastRendered[card.id]) renderCard(card, lastRendered[card.id]);
+    });
+    if (lastExplorer) draw($("explorer-chart"), lastExplorer.series, lastExplorer.kind);
+  });
 })();

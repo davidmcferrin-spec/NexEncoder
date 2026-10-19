@@ -45,21 +45,50 @@ header('X-Content-Type-Options: nosniff');
     </nav>
     <div class="side-foot">HD-SDI · SRT / HLS</div>
   </aside>
-  <main class="shell-main">
+  <main class="shell-main metrics-page">
     <div class="page-head">
       <div>
         <h1>Metrics</h1>
-        <p class="lead">CPU, memory, disk, GPU, uptime, and every encoder series. Charts refresh every two seconds.</p>
-      </div>
-      <div class="page-head-actions">
-        <span class="badge" id="prom-status">Checking Prometheus…</span>
+        <p class="lead">Host and encoder charts for the selected range. Auto-refresh keeps a preset window current.</p>
       </div>
     </div>
+    <div class="metrics-bar">
+      <span class="metrics-label">Range</span>
+      <button type="button" class="secondary range is-selected" data-range="15m">15m</button>
+      <button type="button" class="secondary range" data-range="1h">1h</button>
+      <button type="button" class="secondary range" data-range="6h">6h</button>
+      <button type="button" class="secondary range" data-range="24h">24h</button>
+      <span class="metrics-rule" aria-hidden="true"></span>
+      <label class="metrics-dt">From
+        <input type="datetime-local" id="from-dt" aria-label="Custom range start">
+      </label>
+      <label class="metrics-dt">To
+        <input type="datetime-local" id="to-dt" aria-label="Custom range end">
+      </label>
+      <button type="button" class="secondary" id="range-apply">Apply</button>
+      <button type="button" class="secondary" id="range-clear">Clear</button>
+      <label class="metrics-auto">
+        <input type="checkbox" id="auto-refresh" checked> Auto-refresh
+      </label>
+      <span id="range-note" class="muted"></span>
+      <span class="badge" id="prom-status">Checking Prometheus…</span>
+    </div>
     <div class="banner" id="prom-banner" hidden></div>
-    <h2>Host</h2>
-    <div class="chart-grid" id="host-charts"></div>
-    <h2>Inputs and outputs</h2>
-    <div class="chart-grid" id="encoder-charts"></div>
+    <div class="chart-grid" id="chart-grid"></div>
+    <section class="panel">
+      <h2>Input lock</h2>
+      <div id="lock-timeline" class="lock-timeline"></div>
+      <div class="lock-legend">
+        <span><i class="lock-key locked"></i>locked</span>
+        <span><i class="lock-key unlocked"></i>unlocked</span>
+        <span><i class="lock-key nodata"></i>no data</span>
+      </div>
+      <p class="muted" id="lock-empty">No input samples in this range.</p>
+    </section>
+    <section class="panel">
+      <h2>Inputs and outputs</h2>
+      <div id="info-table"><p class="muted">No samples yet</p></div>
+    </section>
     <section class="panel">
       <div class="page-head">
         <h2>Prometheus series</h2>
@@ -73,6 +102,7 @@ header('X-Content-Type-Options: nosniff');
       <div id="explorer-info"></div>
       <p class="muted" id="explorer-meta">Select a series to chart it.</p>
     </section>
+    <p id="host-uptime" class="uptime-bar">Host uptime: <strong>—</strong></p>
   </main>
   <footer class="shell-footer">
     <span>NexEncoder</span>

@@ -7,7 +7,7 @@ Blackmagic DeckLink Duo / Duo 2.
 - Outputs per input: SRT (caller or listener) or HLS (push or pull), H.264 6-18 Mbps + AAC stereo
 - Captions: 708 re-embedded as A/53 SEI; 608 carried inside the 708 CDP
 - SCTE: 104 translated to SCTE-35 splice_info_section, muxed on a data PID
-- Monitor: the program picture over WebRTC (MediaMTX), with caption and SCTE sideband. Squeeze, graphics, and bars are in that picture. The monitor process can restart without stopping SRT.
+- Monitor: the program picture over WebRTC (MediaMTX), with caption and SCTE sideband. Squeeze, graphics, and bars are in that picture. Each picture has a browser mute button, volume slider, and horizontal level meters. The monitor process can restart without stopping SRT.
 
 No Node. No Docker. Runs on the host under systemd (Ubuntu 24.04 LTS).
 
@@ -52,8 +52,10 @@ only to Apache. PHP calls that feed for config, presets, the service list, and t
 notes, still, log, and metrics. Preview video is WebRTC from MediaMTX, not from Apache.
 
 Raster, DeckLink device, bitrate, and SRT/HLS settings are stored by that config save
-(restart the channel unit to apply them). Metrics charts CPU, memory, disk, GPU, and uptime
-from Prometheus, plus every `nexencoder_*` series. Measured bitrate and resolution appear
+(restart the channel unit to apply them). Metrics charts CPU, memory, disk, and GPU
+from Prometheus over 15 minutes, 1 hour, 6 hours, 24 hours, or a custom window up to 7 days,
+plus every `nexencoder_*` series. Input lock is a timeline. Host uptime is a footer line.
+Measured bitrate and resolution appear
 after a channel's ffmpeg progress file is updating. Services can start, stop, restart,
 enable, and disable the allowlisted units, including `mediamtx` and `nexencoder-channel@A` / `@B`.
 The journal view can be copied for the selected unit. The support bundle, on its own bar on the Services page, builds one zip of every
@@ -69,7 +71,9 @@ file. The Inputs page can restart `nexencoder-channel@A` or `@B` after a save.
 
 The monitor page plays each program from MediaMTX at `http://<host>:8889/inputA/whep` and
 `inputB`. That proxy decodes the same local feed SRT sends, so squeeze, graphics, and bars
-match the output. Restarting the proxy does not restart the encode. The channel posts
+match the output. The picture stays muted for autoplay. A speaker button and volume slider
+under each frame play that program's stereo audio in the browser, and horizontal meters
+under the slider show left and right level. Restarting the proxy does not restart the encode. The channel posts
 caption and splice notes to `/api/sideband` as VANC arrives.
 `POST /api/channels/A/scte` translates a SCTE-104 message and sends the SCTE-35 section to
 the channel's spliceinject port. spliceinject listens on `127.0.0.1:19101` (A)

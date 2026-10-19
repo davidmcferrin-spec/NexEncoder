@@ -815,11 +815,42 @@ static const uint8_t *slot_frame(NexEffectContext *s, int index, int w, int h)
     return same ? s->slot_cache[index] : NULL;
 }
 
+/* The picture and then each layer, bottom to top. Every step is one image the
+ * size of the frame, so a band of rows can be done by any thread alone. */
+typedef struct CompJob {
+    uint8_t *dst;
+    const uint8_t *src[NX_SLOTS + 1];
+    int is_video[NX_SLOTS + 1];
+    int steps;
+    int w, h, covered;
+} CompJob;
+
+static int composite_rows(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
+{
+    const CompJob *job = arg;
+    int row_from = (int)((int64_t)job->h * jobnr / nb_jobs);
+    int row_to = (int)((int64_t)job->h * (jobnr + 1) / nb_jobs);
+    size_t first = (size_t)row_from * job->w;
+    size_t count = (size_t)(row_to - row_from) * job->w;
+    size_t i;
+    int n;
+    for (n = 0; n < job->steps; n++) {
+        const uint8_t *from = job->src[n] + first * 4;
+        uint8_t *to = job->dst + first * 4;
+        if (job->is_video[n]) {
+            draw_video(to, from, count, job->covered);
+        } else {
+            for (i = 0; i < count; i++)
+                over_pixel(to + i * 4, from + i * 4);
+        }
+    }
+    return 0;
+}
+
 static void composite(uint8_t *dst, const uint8_t *video, int w, int h,
                       NexEffectContext *s)
 {
-    size_t pixels = (size_t)w * h;
-    size_t i;
+    CompJob job;
     int order[NX_SLOTS];
     int count = 0;
     int n, j, drawn_video = 0;
@@ -842,21 +873,31 @@ static void composite(uint8_t *dst, const uint8_t *video, int w, int h,
         }
         order[j] = item;
     }
+    job.dst = dst;
+    job.steps = 0;
+    job.w = w;
+    job.h = h;
+    job.covered = covered;
     for (n = 0; n < count; n++) {
         int index = order[n];
         const uint8_t *layer;
         if (!drawn_video && s->signal_ok && s->slots[index].level > 0) {
-            draw_video(dst, video, pixels, covered);
+            job.src[job.steps] = video;
+            job.is_video[job.steps++] = 1;
             drawn_video = 1;
         }
         layer = slot_frame(s, index, w, h);
         if (!layer)
             continue;
-        for (i = 0; i < pixels; i++)
-            over_pixel(dst + i * 4, layer + i * 4);
+        job.src[job.steps] = layer;
+        job.is_video[job.steps++] = 0;
     }
-    if (!drawn_video && s->signal_ok)
-        draw_video(dst, video, pixels, covered);
+    if (!drawn_video && s->signal_ok) {
+        job.src[job.steps] = video;
+        job.is_video[job.steps++] = 1;
+    }
+    ff_filter_execute(s->self, composite_rows, &job, NULL,
+                      FFMAX(1, FFMIN(h, ff_filter_get_nb_threads(s->self))));
     if (s->bars) {
         draw_bars(dst, w, h);
         if (s->ident[0] && strcmp(s->ident, "-"))
