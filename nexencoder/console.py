@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .channels import load_config, save_config, snapshot_for
 from .cgfeed import detect_html_backend, ndi_available
-from .decklink import list_devices
+from .decklink import DeckLinkWatch, list_devices
 from .effects import (
     bars_path,
     delete_preset,
@@ -37,7 +37,15 @@ from .errors import ParseError
 from .metrics import CATALOG, render_metrics
 from .pipeline import SPLICE_PORT, preview_path, sections_from_mom, whep_url
 from .prom import PrometheusError, fetch
-from .services import ServiceError, ServiceUnavailable, act, journal_argv, list_units, normalize_unit
+from .services import (
+    ServiceError,
+    ServiceUnavailable,
+    act,
+    journal_argv,
+    list_units,
+    normalize_unit,
+)
+from .support import build_bundle
 from .sideband import Sideband
 from .status import signals_from_progress
 from .vanc import events_from_vanc
@@ -53,6 +61,7 @@ class Console:
         prometheus_url: str = "http://127.0.0.1:9090",
         unit_runner=None,
         journal_builder=None,
+        support_runner=None,
         config_path: Path | None = None,
         state_dir: Path | None = None,
         device_lister=None,
@@ -60,11 +69,13 @@ class Console:
         sideband: Sideband | None = None,
         html_backend=None,
         format_probe=None,
+        decklink=None,
     ) -> None:
         repo = Path(__file__).resolve().parents[1]
         self.prometheus_url = prometheus_url
         self.unit_runner = unit_runner
         self.journal_builder = journal_builder or journal_argv
+        self.support_runner = support_runner
         self.config_path = config_path or (repo / "var" / "config.json")
         self.state_dir = state_dir or (repo / "var" / "state")
         self.device_lister = device_lister or list_devices
@@ -72,6 +83,7 @@ class Console:
         self.sideband = sideband or Sideband()
         self.html_backend = html_backend or detect_html_backend
         self.format_probe = format_probe
+        self.decklink = decklink if decklink is not None else DeckLinkWatch()
 
     def metrics_text(self) -> str:
         config = load_config(self.config_path)
@@ -123,6 +135,8 @@ def make_handler(console: Console):
                     self._json(200, {"ok": True, "config": config, "bars": bars})
                 elif path == "/api/devices":
                     self._json(200, {"ok": True, "devices": console.device_lister()})
+                elif path == "/api/decklink":
+                    self._json(200, console.decklink.snapshot())
                 elif path == "/api/preview":
                     host = self.headers.get("Host", "127.0.0.1").split(":")[0] or "127.0.0.1"
                     channels = {
@@ -139,6 +153,8 @@ def make_handler(console: Console):
                     self._still(channel)
                 elif path == "/api/services":
                     self._json(200, list_units(console.unit_runner))
+                elif path == "/api/support":
+                    self._support(query.get("hours", ""))
                 elif path.startswith("/api/services/") and path.endswith("/log"):
                     unit = unquote(path[len("/api/services/"):-len("/log")].strip("/"))
                     self._journal(unit)
@@ -345,6 +361,18 @@ def make_handler(console: Console):
                 return
             self._json(status if 200 <= status < 500 else 502, payload)
 
+        def _support(self, hours: str) -> None:
+            try:
+                filename, data = build_bundle(
+                    hours,
+                    config_path=console.config_path,
+                    runner=console.support_runner,
+                )
+            except ValueError as exc:
+                self._json(400, {"ok": False, "detail": str(exc)})
+                return
+            self._bytes(200, "application/zip", data, filename)
+
         def _journal(self, unit: str) -> None:
             try:
                 argv = console.journal_builder(normalize_unit(unit), True)
@@ -400,9 +428,11 @@ def make_handler(console: Console):
         def _json(self, status: int, payload: dict) -> None:
             self._bytes(status, "application/json; charset=utf-8", json.dumps(payload).encode("utf-8"))
 
-        def _bytes(self, status: int, content_type: str, body: bytes) -> None:
+        def _bytes(self, status: int, content_type: str, body: bytes, filename: str | None = None) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
+            if filename:
+                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
@@ -428,6 +458,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--state", type=Path, default=repo / "var" / "state")
     args = parser.parse_args(argv)
     console = Console(args.prometheus, config_path=args.config, state_dir=args.state)
+    console.decklink.start()
     httpd = serve(console, args.host, args.port)
     log.info("live feed on http://%s:%s", args.host, args.port)
     try:

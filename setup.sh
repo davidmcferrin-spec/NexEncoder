@@ -12,9 +12,9 @@
 # official release and installed when tsp is not already on PATH.
 # Desktop Video and the DeckLink SDK are installed from archives already in
 # /home/nexstar (or the home of the user who started this script). They are
-# not downloaded. decklink-configure is built from those headers and a boot
-# oneshot sets Duo 2 / 8K Pro connectors to half-duplex inputs before the
-# channels open the card. Rebuild FFmpeg with NEXENCODER_FORCE_FFMPEG_BUILD=1.
+# not downloaded. decklink-configure and decklink-status are built from those
+# headers. A boot oneshot sets Duo 2 / 8K Pro connectors to half-duplex inputs
+# before the channels open the card. Rebuild FFmpeg with NEXENCODER_FORCE_FFMPEG_BUILD=1.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -226,12 +226,12 @@ install_decklink_configure() {
   if ! sdk="$(decklink_sdk_dir)"; then
     die "DeckLink SDK headers not found. Put Blackmagic_DeckLink_SDK_*.zip in /home/nexstar."
   fi
-  command -v g++ >/dev/null 2>&1 || die "g++ is required to build decklink-configure"
-  command -v make >/dev/null 2>&1 || die "make is required to build decklink-configure"
-  log "building decklink-configure with headers in ${sdk}"
-  make DECKLINK_SDK="$sdk" decklink-configure
-  $SUDO install -m 0755 decklink-configure /usr/local/bin/decklink-configure
-  log "installed /usr/local/bin/decklink-configure"
+  command -v g++ >/dev/null 2>&1 || die "g++ is required to build the DeckLink tools"
+  command -v make >/dev/null 2>&1 || die "make is required to build the DeckLink tools"
+  log "building decklink-configure and decklink-status with headers in ${sdk}"
+  make DECKLINK_SDK="$sdk" decklink-configure decklink-status
+  $SUDO install -m 0755 decklink-configure decklink-status /usr/local/bin/
+  log "installed /usr/local/bin/decklink-configure and /usr/local/bin/decklink-status"
 }
 
 install_ffmpeg() {

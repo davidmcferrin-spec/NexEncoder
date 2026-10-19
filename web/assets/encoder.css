@@ -150,6 +150,30 @@ button.unit-row.is-selected,
   background: var(--nx-accent-soft);
   color: var(--nx-ink);
 }
+.support-bundle-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0 0 1rem;
+  padding: 0.75rem 0.9rem;
+  background: var(--nx-surface);
+  border: 1px solid var(--nx-line);
+  border-radius: 8px;
+}
+.support-bundle-bar label {
+  color: var(--nx-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.support-bundle-bar select {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--nx-line);
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+}
 .ops-layout {
   display: grid;
   grid-template-columns: minmax(240px, 320px) 1fr;

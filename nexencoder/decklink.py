@@ -5,9 +5,14 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import threading
+import time
 from typing import Any
 
 _DEVICE_LINE = re.compile(r"""['"]([^'"]+)['"]""")
+STATUS_HELPER = "/usr/local/bin/decklink-status"
+STATUS_TIMEOUT = 15.0
+STATUS_INTERVAL = 5.0
 
 
 def parse_list_devices(text: str) -> list[dict[str, Any]]:
@@ -86,3 +91,82 @@ def parse_status(text: str, device: str) -> dict[str, Any]:
         "format": mode if locked else "",
         "detail": "sub-device busy" if match.get("busy") else "",
     }
+
+
+def query_status(helper: str = STATUS_HELPER, runner=None, timeout: float = STATUS_TIMEOUT) -> dict[str, Any]:
+    """Run decklink-status and return its device list.
+
+    The helper prints one JSON object. A missing binary or a driver that is
+    not loaded comes back as ok false with an empty device list.
+    """
+    if runner is None:
+        try:
+            proc = subprocess.run(
+                [helper],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {"ok": False, "devices": [], "detail": str(exc)}
+        text = proc.stdout or ""
+        if not text.strip():
+            text = proc.stderr or ""
+    else:
+        try:
+            text = runner([helper])
+        except OSError as exc:
+            return {"ok": False, "devices": [], "detail": str(exc)}
+    start = text.find("{")
+    if start < 0:
+        return {"ok": False, "devices": [], "detail": "decklink-status returned no JSON"}
+    try:
+        data = json.loads(text[start:])
+    except json.JSONDecodeError:
+        return {"ok": False, "devices": [], "detail": "decklink-status returned no JSON"}
+    if not isinstance(data, dict):
+        return {"ok": False, "devices": [], "detail": "decklink-status returned no JSON"}
+    if data.get("error"):
+        return {"ok": False, "devices": [], "detail": str(data["error"])}
+    devices = data.get("devices")
+    if not isinstance(devices, list):
+        return {"ok": False, "devices": [], "detail": "decklink-status returned no devices"}
+    return {"ok": True, "devices": devices, "detail": ""}
+
+
+class DeckLinkWatch:
+    """Cache decklink-status so the operator page does not probe the card itself."""
+
+    def __init__(self, helper: str = STATUS_HELPER, runner=None) -> None:
+        self.helper = helper
+        self.runner = runner
+        self._lock = threading.Lock()
+        self._payload: dict[str, Any] = {"ok": False, "devices": [], "detail": "no reading yet", "ts": 0.0}
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._loop, name="nexencoder-decklink", daemon=True)
+        self._thread.start()
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return dict(self._payload)
+
+    def refresh(self) -> None:
+        reading = query_status(self.helper, self.runner)
+        reading["ts"] = time.time() if reading.get("ok") else 0.0
+        with self._lock:
+            self._payload = reading
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self.refresh()
+            except Exception:
+                with self._lock:
+                    self._payload = {"ok": False, "devices": [], "detail": "decklink-status failed", "ts": 0.0}
+            self._stop.wait(STATUS_INTERVAL)

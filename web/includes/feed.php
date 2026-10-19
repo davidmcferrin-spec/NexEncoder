@@ -47,7 +47,7 @@ function nexencoder_pass(int $status, string $type, string $payload): never
  *
  * @return array{0:int,1:string,2:string}
  */
-function nexencoder_get(string $path): array
+function nexencoder_get(string $path, int $timeout = 8): array
 {
     $down = json_encode(['ok' => false, 'detail' => 'The encoder feed is not answering']);
     $url = NEXENCODER_FEED . $path;
@@ -60,7 +60,7 @@ function nexencoder_get(string $path): array
     }
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT => 8,
+        CURLOPT_TIMEOUT => $timeout,
         CURLOPT_CONNECTTIMEOUT => 2,
     ]);
     $payload = curl_exec($ch);

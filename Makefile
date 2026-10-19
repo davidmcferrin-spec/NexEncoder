@@ -1,11 +1,11 @@
-# Build decklink-configure.
+# Build decklink-configure and decklink-status.
 #
 # Requires the Blackmagic DeckLink SDK headers. setup.sh installs them to
 # /opt/decklink-sdk from Blackmagic_DeckLink_SDK_*.zip. Point DECKLINK_SDK at
 # that directory, or at an SDK tree that still has Linux/include underneath.
 #
 #   make DECKLINK_SDK=/opt/decklink-sdk
-#   sudo install -m 0755 decklink-configure /usr/local/bin/decklink-configure
+#   sudo install -m 0755 decklink-configure decklink-status /usr/local/bin/
 
 DECKLINK_SDK ?= /opt/decklink-sdk
 
@@ -28,4 +28,7 @@ endef
 decklink-configure: decklink-configure.cpp
 	$(call DECKLINK_BUILD,decklink-configure,decklink-configure.cpp)
 
-.PHONY: decklink-configure
+decklink-status: decklink-status.cpp
+	$(call DECKLINK_BUILD,decklink-status,decklink-status.cpp)
+
+.PHONY: decklink-configure decklink-status

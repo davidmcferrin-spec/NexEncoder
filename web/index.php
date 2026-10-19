@@ -62,6 +62,7 @@ header('X-Content-Type-Options: nosniff');
         <h3>Input A</h3>
         <span class="badge">Idle</span>
         <dl class="channel-meta">
+          <div><dt>Signal</dt><dd data-field="signal">—</dd></div>
           <div><dt>Raster</dt><dd data-field="format">1080i 59.94</dd></div>
           <div><dt>Delivery</dt><dd data-field="output">SRT listener · port 9000</dd></div>
           <div><dt>Video</dt><dd data-field="bitrate">8 Mbps</dd></div>
@@ -71,6 +72,7 @@ header('X-Content-Type-Options: nosniff');
         <h3>Input B</h3>
         <span class="badge">Idle</span>
         <dl class="channel-meta">
+          <div><dt>Signal</dt><dd data-field="signal">—</dd></div>
           <div><dt>Raster</dt><dd data-field="format">1080i 59.94</dd></div>
           <div><dt>Delivery</dt><dd data-field="output">SRT listener · port 9101</dd></div>
           <div><dt>Video</dt><dd data-field="bitrate">8 Mbps</dd></div>

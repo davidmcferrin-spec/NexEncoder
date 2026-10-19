@@ -49,8 +49,20 @@ header('X-Content-Type-Options: nosniff');
     <div class="page-head">
       <div>
         <h1>Services</h1>
-        <p class="lead">Start, stop, restart, enable, and disable the encoder units. The journal follows the selected unit.</p>
+        <p class="lead">Start, stop, restart, enable, and disable the encoder units. The journal follows the selected unit, and that view can be copied.</p>
       </div>
+    </div>
+    <div class="support-bundle-bar">
+      <label for="bundle-hours">Support bundle</label>
+      <select id="bundle-hours" title="Journal window for every encoder service">
+        <option value="24">Last 24 hours</option>
+        <option value="36">Last 36 hours</option>
+        <option value="48">Last 48 hours</option>
+        <option value="72">Last 72 hours</option>
+        <option value="all">All</option>
+      </select>
+      <button type="button" class="btn" id="download-bundle" title="Download journals, host details, and config as a zip">Download zip</button>
+      <span id="bundle-status" class="muted"></span>
     </div>
     <div class="banner" id="svc-banner" hidden></div>
     <div class="ops-layout">
@@ -66,6 +78,7 @@ header('X-Content-Type-Options: nosniff');
           <button type="button" class="btn" data-action="restart">Restart</button>
           <button type="button" class="btn btn-secondary" data-action="enable">Enable</button>
           <button type="button" class="btn btn-secondary" data-action="disable">Disable</button>
+          <button type="button" class="btn btn-secondary" id="copy-journal">Copy log</button>
           <span id="action-status" class="muted"></span>
         </div>
         <div class="log-box" id="journal" role="log" aria-live="polite"></div>

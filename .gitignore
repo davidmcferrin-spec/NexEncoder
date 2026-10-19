@@ -8,3 +8,4 @@ __pycache__/
 /etc/local.toml
 /var/
 /decklink-configure
+/decklink-status

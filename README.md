@@ -27,9 +27,11 @@ place. Neither archive is downloaded. It also installs pinned TSDuck 3.45-4798
 (the Ubuntu 24.04 package from the official release, skipped when `tsp` is already
 on `PATH`), a pinned MediaMTX v1.21.1 binary, `nexencoder-console.service`, the
 `nexencoder-channel@` template, `nexencoder-decklink-configure.service`, and
-`nexencoder-noc.service`. `setup.sh` builds `decklink-configure` from the SDK
-headers and, before the channels start, sets Duo 2 and 8K Pro connectors to
-half-duplex inputs so connectors 1–4 are separate capture pins. It enables
+`nexencoder-noc.service`. `setup.sh` builds `decklink-configure` and `decklink-status`
+from the SDK headers. Before the channels start, `decklink-configure` sets Duo 2 and
+8K Pro connectors to half-duplex inputs so connectors 1–4 are separate capture pins.
+`decklink-status` prints JSON lock and mode for each connector, and the Inputs page
+and dashboard read that through the live feed. It enables
 and restarts Apache, Prometheus, node_exporter, MediaMTX, the console, the NOC agent,
 and `nexencoder-channel@A` and `@B`. A crashed channel, console, or MediaMTX is restarted
 with no start limit. A channel whose frame count stops moving is restarted by its supervisor.
@@ -52,6 +54,11 @@ Raster, DeckLink device, bitrate, and SRT/HLS settings are stored by that config
 from Prometheus, plus every `nexencoder_*` series. Measured bitrate and resolution appear
 after a channel's ffmpeg progress file is updating. Services can start, stop, restart,
 enable, and disable the allowlisted units, including `mediamtx` and `nexencoder-channel@A` / `@B`.
+The journal view can be copied for the selected unit. The support bundle, on its own bar on the Services page, builds one zip of every
+encoder service (channels, console, NOC, DeckLink setup, MediaMTX, Prometheus, and Apache), plus
+host details such as `lsmod`, `dmesg`, and DeckLink status, for the last 24, 36, 48, or 72 hours,
+or the whole journal. URL credentials and password fields are redacted and the NOC token is left
+out. The Inputs page can restart `nexencoder-channel@A` or `@B` after a save.
 
 The monitor page plays each input from MediaMTX at `http://<host>:8889/inputA/whep` and
 `inputB`. The channel posts caption and splice notes to `/api/sideband` as VANC arrives.

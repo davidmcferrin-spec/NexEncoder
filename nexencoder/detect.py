@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import subprocess
 from pathlib import Path
 
 from .channels import INPUT_SRT_PORTS, load_config, save_config
-from .decklink import parse_status
+from .decklink import STATUS_HELPER, parse_status
 from .effects import read_flag, signal_path, write_text_atomic
 
 log = logging.getLogger("nexencoder.detect")
@@ -149,6 +150,8 @@ def detect_channel(channel_id: str, config_path: Path, state_dir: Path, probe=No
     runner = probe or run_probe
     if spec.get("source") == "srt":
         found = _detect_srt(channel_id, state_dir, runner)
+    elif probe is None and os.access(STATUS_HELPER, os.X_OK):
+        found = parse_probe(run_probe([STATUS_HELPER], timeout=15), spec["device"])
     else:
         found = parse_probe(runner(sdi_probe_argv(spec["device"])), spec["device"])
     if not found["ok"]:

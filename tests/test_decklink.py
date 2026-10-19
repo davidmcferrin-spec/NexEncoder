@@ -1,6 +1,6 @@
 """DeckLink list and status parsing. No card required."""
 
-from nexencoder.decklink import ffmpeg_has_decklink, parse_list_devices, parse_status
+from nexencoder.decklink import ffmpeg_has_decklink, parse_list_devices, parse_status, query_status
 
 
 LISTING = """
@@ -38,3 +38,17 @@ def test_status_json_reports_lock_without_hiding_a_busy_input():
     quiet = parse_status(blob, "DeckLink Duo (2)")
     assert quiet["signal"] == "no_signal" and quiet["format"] == ""
     assert parse_status("{", "DeckLink Duo (1)")["signal"] == "unknown"
+
+
+def test_query_status_reads_helper_json():
+    blob = '{"devices":[{"name":"DeckLink Duo (1)","input_locked":true,"input_mode":"1080i59.94","busy":false}]}'
+
+    def runner(argv):
+        assert argv == ["/usr/local/bin/decklink-status"]
+        return blob
+
+    reading = query_status(runner=runner)
+    assert reading["ok"] is True
+    assert reading["devices"][0]["input_locked"] is True
+    assert query_status(runner=lambda _argv: "not json")["ok"] is False
+    assert query_status(runner=lambda _argv: '{"devices":[],"error":"no_decklink_api"}')["detail"] == "no_decklink_api"

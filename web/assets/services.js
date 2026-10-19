@@ -107,6 +107,86 @@
       });
   }
 
+  function note(id, ok, text) {
+    var node = $(id);
+    node.className = ok ? "ok" : "error";
+    node.textContent = text;
+  }
+
+  function saveBlob(blob, name) {
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  function fileName(response, fallback) {
+    var header = response.headers.get("Content-Disposition") || "";
+    var match = /filename="([^"]+)"/.exec(header);
+    return match ? match[1] : fallback;
+  }
+
+  function copyWithSelection(text) {
+    var ok = false;
+    function onCopy(event) {
+      if (!event.clipboardData) return;
+      event.clipboardData.setData("text/plain", text);
+      event.preventDefault();
+      ok = true;
+    }
+    document.addEventListener("copy", onCopy);
+    try {
+      ok = document.execCommand("copy") || ok;
+    } catch (err) {
+      ok = false;
+    }
+    document.removeEventListener("copy", onCopy);
+    return ok;
+  }
+
+  $("copy-journal").addEventListener("click", function () {
+    var text = $("journal").textContent || "";
+    if (!text.trim()) {
+      note("action-status", false, "Journal is empty");
+      return;
+    }
+    if (copyWithSelection(text)) {
+      note("action-status", true, "Log copied");
+      return;
+    }
+    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+      note("action-status", false, "Copy failed");
+      return;
+    }
+    navigator.clipboard.writeText(text).then(function () {
+      note("action-status", true, "Log copied");
+    }, function () {
+      note("action-status", false, "Copy failed");
+    });
+  });
+
+  $("download-bundle").addEventListener("click", function () {
+    var hours = $("bundle-hours").value;
+    note("bundle-status", true, "Building zip…");
+    fetch("/admin/support.php?hours=" + encodeURIComponent(hours)).then(function (response) {
+      if (!response.ok) {
+        return response.json().then(function (body) {
+          throw new Error(body.detail || "Support zip failed");
+        });
+      }
+      var name = fileName(response, "nexencoder-support-" + hours + ".zip");
+      return response.blob().then(function (blob) { saveBlob(blob, name); });
+    }).then(function () {
+      note("bundle-status", true, "Support zip downloaded");
+    }).catch(function (err) {
+      note("bundle-status", false, err.message || "Support zip failed");
+    });
+  });
+
   document.querySelectorAll("[data-action]").forEach(function (button) {
     button.addEventListener("click", function () { run(button.getAttribute("data-action")); });
   });

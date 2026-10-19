@@ -56,6 +56,7 @@ header('X-Content-Type-Options: nosniff');
       <section class="panel">
         <h2>Input A</h2>
         <p class="muted" id="endpoint-A">DeckLink Duo (1)</p>
+        <p class="save-row"><span class="badge" id="lock-A">Lock unknown</span></p>
         <label for="source-A">Source</label>
         <select id="source-A" data-channel="A" data-key="source">
           <option value="sdi">SDI</option>
@@ -87,6 +88,8 @@ header('X-Content-Type-Options: nosniff');
         <p class="save-row">
           <button type="button" class="btn-text" id="bars-A">Bars with ident: off</button>
           <span class="ok" id="bars-note-A" hidden></span>
+          <button type="button" class="btn-text" id="restart-A">Restart channel</button>
+          <span class="muted" id="restart-note-A"></span>
           <span class="ok" id="saved-A" hidden>Saved. Restart the channel service to apply it.</span>
           <span class="error" id="error-A" role="alert" hidden></span>
         </p>
@@ -94,6 +97,7 @@ header('X-Content-Type-Options: nosniff');
       <section class="panel">
         <h2>Input B</h2>
         <p class="muted" id="endpoint-B">DeckLink Duo (2)</p>
+        <p class="save-row"><span class="badge" id="lock-B">Lock unknown</span></p>
         <label for="source-B">Source</label>
         <select id="source-B" data-channel="B" data-key="source">
           <option value="sdi">SDI</option>
@@ -125,6 +129,8 @@ header('X-Content-Type-Options: nosniff');
         <p class="save-row">
           <button type="button" class="btn-text" id="bars-B">Bars with ident: off</button>
           <span class="ok" id="bars-note-B" hidden></span>
+          <button type="button" class="btn-text" id="restart-B">Restart channel</button>
+          <span class="muted" id="restart-note-B"></span>
           <span class="ok" id="saved-B" hidden>Saved. Restart the channel service to apply it.</span>
           <span class="error" id="error-B" role="alert" hidden></span>
         </p>

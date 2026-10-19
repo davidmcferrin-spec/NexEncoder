@@ -33,6 +33,8 @@ def test_setup_builds_the_tool_and_applies_it_before_the_channels():
     assert script.index("install_decklink\n") < script.index("install_decklink_configure\n")
     assert "make DECKLINK_SDK=" in script
     assert "/usr/local/bin/decklink-configure" in script
+    assert "/usr/local/bin/decklink-status" in script
+    assert "input_locked" in (ROOT / "decklink-status.cpp").read_text(encoding="utf-8")
     assert "nexencoder-decklink-configure.service" in script
     stop = script.index("systemctl stop nexencoder-channel@A nexencoder-channel@B")
     start = script.index("systemctl start nexencoder-decklink-configure")

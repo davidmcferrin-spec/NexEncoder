@@ -300,6 +300,7 @@
       if (SOURCES.indexOf(select.value) === -1) return;
       config.inputs[id].source = select.value;
       persist(id);
+      pollLock();
     });
   });
 
@@ -373,6 +374,30 @@
   });
 
   CHANNELS.forEach(function (id) {
+    var restart = document.getElementById("restart-" + id);
+    if (!restart) return;
+    restart.addEventListener("click", function () {
+      if (!window.confirm("Restart channel " + id + "? The output drops until the pipeline is back.")) return;
+      var status = document.getElementById("restart-note-" + id);
+      if (status) status.textContent = "Restarting…";
+      fetch("/admin/service.php?unit=" + encodeURIComponent("nexencoder-channel@" + id) + "&action=restart", {
+        method: "POST",
+        headers: { "X-Requested-With": "NexEncoder" }
+      }).then(function (response) {
+        return response.json().then(function (body) {
+          return { ok: response.ok, body: body };
+        });
+      }).then(function (result) {
+        if (status) status.textContent = result.ok ? "Channel " + id + " is restarting." : (result.body.detail || "Restart failed");
+        if (!result.ok) fieldError(id, result.body.detail || "Restart failed");
+      }).catch(function () {
+        if (status) status.textContent = "";
+        fieldError(id, "The console did not answer.");
+      });
+    });
+  });
+
+  CHANNELS.forEach(function (id) {
     var button = document.getElementById("bars-" + id);
     if (!button) return;
     button.addEventListener("click", function () {
@@ -415,6 +440,51 @@
   }
 
   paint();
+  pollLock();
+  setInterval(pollLock, 5000);
+
+  function paintLock(id, device, known) {
+    var badge = document.getElementById("lock-" + id);
+    var row = document.querySelector("[data-channel-summary='" + id + "'] [data-field='signal']");
+    var input = config.inputs[id];
+    var text = "Lock unknown";
+    var kind = "";
+    if (input && input.source === "srt") {
+      text = "SRT";
+    } else if (known && device && device.input_locked) {
+      text = device.input_mode && device.input_mode !== "unknown" ? ("Locked · " + device.input_mode) : "Locked";
+      kind = "badge-ok";
+    } else if (known && device) {
+      text = "No signal";
+      kind = "badge-bad";
+    }
+    if (badge) {
+      badge.className = kind ? ("badge " + kind) : "badge";
+      badge.textContent = text;
+    }
+    if (row) row.textContent = text;
+  }
+
+  function pollLock() {
+    if (!document.getElementById("lock-A") && !document.querySelector("[data-field='signal']")) return;
+    fetch("/live/decklink.php").then(function (response) {
+      if (!response.ok) throw new Error("decklink");
+      return response.json();
+    }).then(function (body) {
+      var devices = body && body.devices ? body.devices : [];
+      var known = !!(body && body.ok);
+      ["A", "B"].forEach(function (id) {
+        var name = ENDPOINTS[id].sdi;
+        var match = null;
+        devices.forEach(function (device) {
+          if (device && device.name === name) match = device;
+        });
+        paintLock(id, match, known);
+      });
+    }).catch(function () {
+      ["A", "B"].forEach(function (id) { paintLock(id, null, false); });
+    });
+  }
 
   fetch("/admin/config.php").then(function (response) {
     if (!response.ok) throw new Error("config");
@@ -428,5 +498,6 @@
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
     paint();
+    pollLock();
   }).catch(function () {});
 })();

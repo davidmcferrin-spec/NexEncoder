@@ -172,6 +172,39 @@ def test_journal_stream_and_missing_systemctl():
         httpd.shutdown()
 
 
+def test_support_zip_is_one_system_bundle(tmp_path):
+    from nexencoder.channels import save_config
+
+    config = tmp_path / "config.json"
+    save_config(config, {})
+
+    def support(argv):
+        if argv and argv[0] == "journalctl":
+            return 0, "bundle-line\n", ""
+        if argv and argv[0] == "lsmod":
+            return 0, "blackmagic_io\n", ""
+        if argv and argv[0] == "dmesg":
+            return 0, "decklink warn\n", ""
+        return 0, "ok\n", ""
+
+    httpd, port = _start(Console(
+        config_path=config,
+        support_runner=support,
+    ))
+    try:
+        status, missing = _get(port, "/api/services/prometheus.service/journal")
+        assert status == 404
+        with urlopen(f"http://127.0.0.1:{port}/api/support?hours=36", timeout=3) as response:
+            payload = response.read()
+            disposition = response.headers.get("Content-Disposition", "")
+        assert payload.startswith(b"PK")
+        assert "36h" in disposition
+        status, bad = _get(port, "/api/support?hours=12")
+        assert status == 400 and "hours" in bad
+    finally:
+        httpd.shutdown()
+
+
 def test_effect_recall_and_normalize_leave_the_pipeline_running(tmp_path):
     from nexencoder.channels import save_config
 
@@ -230,6 +263,29 @@ def test_auto_saves_the_detected_raster_and_leaves_a_miss_alone(tmp_path):
         assert "No signal" in missed["detail"]
         assert json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))["inputs"]["B"]["format"] == "1080i59.94"
         assert any("decklink" in argv for argv in calls)
+    finally:
+        httpd.shutdown()
+
+
+class _DeckLink:
+    def snapshot(self):
+        return {
+            "ok": True,
+            "devices": [{"name": "DeckLink Duo (1)", "input_locked": True, "input_mode": "1080i59.94", "busy": False}],
+            "detail": "",
+            "ts": 1,
+        }
+
+
+def test_decklink_status_is_served(tmp_path):
+    httpd, port = _start(Console(
+        config_path=tmp_path / "config.json",
+        state_dir=tmp_path / "state",
+        decklink=_DeckLink(),
+    ))
+    try:
+        status, body = _get(port, "/api/decklink")
+        assert status == 200 and '"input_locked": true' in body
     finally:
         httpd.shutdown()
 

@@ -90,7 +90,7 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     feed = (WEB / "includes" / "feed.php").read_text(encoding="utf-8")
     assert "http://127.0.0.1:8788" in feed
     assert "NexEncoder" in feed
-    for script in ("config.php", "bars.php", "service.php", "preset.php", "detect.php"):
+    for script in ("config.php", "bars.php", "service.php", "preset.php", "detect.php", "support.php"):
         text = (WEB / "admin" / script).read_text(encoding="utf-8")
         assert "includes/feed.php" in text
         assert "nexencoder_admin_request" in text
@@ -107,6 +107,14 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     services = (WEB / "assets" / "services.js").read_text(encoding="utf-8")
     assert "/admin/service.php" in services and "/admin/services.php" in services
     assert "/live/log.php" in services
+    assert "/admin/journal.php" not in services and "/admin/support.php" in services
+    page = (WEB / "services.php").read_text(encoding="utf-8")
+    assert 'id="copy-journal"' in page and 'id="download-bundle"' in page
+    assert 'class="support-bundle-bar"' in page
+    assert page.index("support-bundle-bar") < page.index('id="unit-list"')
+    assert 'id="dump-journal"' not in page
+    assert "Download zip" in page
+    assert 'value="36"' in page and 'value="all"' in page
     effects = (WEB / "assets" / "effects.js").read_text(encoding="utf-8")
     assert "/admin/preset.php" in effects and "/admin/recall.php" in effects
     assert "/live/still.php" in effects
@@ -116,4 +124,9 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     assert 'id="sideband-A"' in monitor and 'id="sideband-B"' in monitor
     assert 'id="sideband-log"' not in monitor
     assert 'getElementById("sideband-"' in preview
+    inputs = (WEB / "inputs.php").read_text(encoding="utf-8")
+    assert 'id="lock-A"' in inputs and 'id="lock-B"' in inputs
+    assert 'id="restart-A"' in inputs and 'id="restart-B"' in inputs
+    assert "nexencoder-channel@" in js
+    assert "/live/decklink.php" in (WEB / "assets" / "console.js").read_text(encoding="utf-8")
     assert "/api/" not in (WEB / "assets" / "metrics.js").read_text(encoding="utf-8")
