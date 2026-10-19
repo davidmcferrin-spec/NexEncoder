@@ -1,14 +1,25 @@
 """CG slot files and feeder planning. Nothing here opens a DeckLink device."""
 
+import io
+import json
+import logging
 import struct
+import threading
 import zlib
 
 from nexencoder.cgfeed import (
     SlotWriter,
+    _Running,
+    _drain,
     chromium_argv,
+    chromium_env,
     decode_png_bgra,
+    devtools_page_url,
+    finished_keys,
+    reconcile_once,
     with_lower_priority,
     detect_html_backend,
+    feeder_key,
     key_argv,
     ndi_argv,
     plan_changes,
@@ -16,6 +27,7 @@ from nexencoder.cgfeed import (
     update_key_owner,
     wpe_argv,
 )
+from nexencoder.effects import layers_path
 from nexencoder.effect_patch import MARKER, filter_source, patch_allfilters, patch_makefile
 
 
@@ -87,8 +99,80 @@ def test_chromium_capture_keeps_a_transparent_background():
     assert "--disable-domain-reliability" in argv
     assert any("PushMessaging" in item for item in argv)
     assert "--no-sandbox" in argv
+    assert "--remote-allow-origins=*" in argv
     assert "--user-data-dir=/var/lib/nexencoder/chrome/9222" in argv
     assert "jpeg" not in " ".join(argv)
+
+
+def test_devtools_page_url_ignores_the_browser_socket():
+    browser = {
+        "type": "browser",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/browser/abc",
+    }
+    hidden = {"type": "page", "id": "1"}
+    page = {
+        "type": "page",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/def",
+    }
+    assert devtools_page_url([browser, hidden]) == ""
+    assert devtools_page_url([browser, page]) == page["webSocketDebuggerUrl"]
+
+
+def test_chromium_env_has_no_session_bus():
+    env = chromium_env({"DBUS_SESSION_BUS_ADDRESS": "disabled:", "PATH": "/usr/bin"})
+    assert "DBUS_SESSION_BUS_ADDRESS" not in env
+    assert env["PATH"] == "/usr/bin"
+
+
+def test_chrome_bus_errors_stay_out_of_the_journal(caplog):
+    caplog.set_level(logging.WARNING)
+    _drain(io.BytesIO(
+        b"Failed to connect to the bus: Could not parse server address\n"
+        b"Failed to call method: org.freedesktop.DBus.NameHasOwner\n"
+        b"DevTools listening on ws://127.0.0.1:9/devtools/browser/x\n"
+    ), "chromium")
+    assert [record.message for record in caplog.records] == [
+        "chromium DevTools listening on ws://127.0.0.1:9/devtools/browser/x",
+    ]
+
+
+def test_a_stopped_html_feeder_starts_again(tmp_path, monkeypatch):
+    url = "http://127.0.0.1/cg/bug.html"
+    spec = {
+        "width": 320,
+        "height": 180,
+        "layers": [{
+            "slot": 0,
+            "path": str(tmp_path / "a.nxcg"),
+            "source": {"type": "html", "url": url},
+        }],
+    }
+    layers_path(tmp_path, "A").write_text(json.dumps(spec), encoding="utf-8")
+    started = []
+    hold = threading.Event()
+
+    def fake_start(layer, spec, backend, spawn):
+        started.append(feeder_key(layer))
+        holder = _Running()
+        holder.thread = threading.Thread(target=hold.wait, daemon=True)
+        holder.thread.start()
+        return holder
+
+    monkeypatch.setattr("nexencoder.cgfeed._start_layer", fake_start)
+    dead = _Running()
+    dead.thread = threading.Thread(target=lambda: None)
+    dead.thread.start()
+    dead.thread.join()
+    key = f"html:0:{url}"
+    assert finished_keys({key: dead}) == [key]
+    halted = _Running()
+    halted.stop.set()
+    halted.thread = dead.thread
+    assert finished_keys({key: halted}) == []
+    out = reconcile_once(tmp_path, "A", {key: dead}, backend="chromium")
+    assert started == [key]
+    assert out[key] is not dead
+    assert out[key].thread.is_alive()
 
 
 def test_html_renderer_runs_below_the_capture():

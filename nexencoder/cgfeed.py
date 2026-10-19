@@ -237,9 +237,35 @@ def chromium_argv(browser: str, port: int, url: str, width: int, height: int) ->
         "--default-background-color=00000000",
         f"--user-data-dir=/var/lib/nexencoder/chrome/{port}",
         f"--remote-debugging-port={port}",
+        # Without this, current Chrome omits webSocketDebuggerUrl from the page list.
+        "--remote-allow-origins=*",
         f"--window-size={width},{height}",
         url,
     ]
+
+
+def chromium_env(base: dict | None = None) -> dict:
+    """Environment for one headless Chrome.
+
+    ``disabled:`` is not a dbus address. Chrome rejects it on every attempt
+    and the page target never appears. Unset means there is no session bus.
+    """
+    env = dict(os.environ if base is None else base)
+    env.pop("DBUS_SESSION_BUS_ADDRESS", None)
+    return env
+
+
+def devtools_page_url(pages) -> str:
+    """Websocket of a page target. The browser socket cannot capture a screenshot."""
+    if not isinstance(pages, list):
+        return ""
+    for page in pages:
+        if not isinstance(page, dict) or page.get("type") != "page":
+            continue
+        ws = page.get("webSocketDebuggerUrl")
+        if isinstance(ws, str) and ws:
+            return ws
+    return ""
 
 
 def ndi_argv(name: str, width: int, height: int) -> list[str]:
@@ -369,10 +395,21 @@ def update_key_owner(state_dir: Path, channel_id: str, needed: bool) -> str:
         os.close(fd)
 
 
+_CHROME_QUIET = (
+    "Failed to connect to the bus",
+    "NameHasOwner",
+    "DEPRECATED_ENDPOINT",
+)
+
+
 def _drain(pipe, label: str) -> None:
+    quiet = label == "chromium"
     try:
         for line in iter(pipe.readline, b""):
-            log.warning("%s %s", label, line.decode("utf-8", "replace").rstrip())
+            text = line.decode("utf-8", "replace").rstrip()
+            if not text or (quiet and any(mark in text for mark in _CHROME_QUIET)):
+                continue
+            log.warning("%s %s", label, text)
     except OSError:
         log.warning("%s log stopped", label)
 
@@ -505,43 +542,42 @@ def run_chromium_feeder(
 ) -> None:
     """Paint one HTML URL with Chromium and write BGRA frames into the slot."""
     port = _free_port()
-    # Headless Chrome has no session bus. Pointing it at one fills the journal
-    # and the background services add load next to the capture.
-    env = os.environ.copy()
-    env["DBUS_SESSION_BUS_ADDRESS"] = "disabled:"
     # nice is inherited by Chrome's children, so the whole startup stays
     # behind the DeckLink capture. preexec_fn is unsafe in a threaded process.
-    proc = spawn(
-        with_lower_priority(
-            chromium_argv(browser, port, url, writer.width, writer.height),
-            demote=os.name == "posix" and os.path.isfile("/usr/bin/nice"),
-        ),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        env=env,
-    )
-    holder.proc = proc
-    if proc.stderr is not None:
-        threading.Thread(target=_drain, args=(proc.stderr, "chromium"), name="nexencoder-cg-log", daemon=True).start()
+    proc = None
     sock = None
     try:
+        proc = spawn(
+            with_lower_priority(
+                chromium_argv(browser, port, url, writer.width, writer.height),
+                demote=os.name == "posix" and os.path.isfile("/usr/bin/nice"),
+            ),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            env=chromium_env(),
+        )
+        holder.proc = proc
+        if proc.stderr is not None:
+            threading.Thread(target=_drain, args=(proc.stderr, "chromium"), name="nexencoder-cg-log", daemon=True).start()
         target = ""
+        # Host must be localhost. Chrome hides webSocketDebuggerUrl when the
+        # request host is 127.0.0.1, which is why DevTools can be listening
+        # while this loop still finds no page.
+        list_url = f"http://localhost:{port}/json/list"
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline and not holder.stop.is_set():
             try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/json", timeout=1) as response:
+                with urllib.request.urlopen(list_url, timeout=1) as response:
                     pages = json.loads(response.read().decode("utf-8"))
             except (OSError, json.JSONDecodeError):
                 time.sleep(0.2)
                 continue
-            if isinstance(pages, list):
-                for page in pages:
-                    if isinstance(page, dict) and page.get("webSocketDebuggerUrl"):
-                        target = str(page["webSocketDebuggerUrl"])
-                        break
+            target = devtools_page_url(pages)
             if target:
                 break
         if not target:
+            if holder.stop.is_set():
+                return
             raise OSError("Chromium did not open a devtools page")
         parsed = urlparse(target)
         sock = _ws_handshake(parsed.hostname or "127.0.0.1", parsed.port or port, parsed.path or "/")
@@ -596,6 +632,12 @@ def run_chromium_feeder(
             remain = max(0.05, (1 / 10) - (time.monotonic() - started))
             if holder.stop.wait(remain):
                 break
+    except OSError as exc:
+        log.warning("HTML renderer stopped: %s", exc)
+        holder.stop.wait(5)
+    except Exception:
+        log.warning("HTML renderer stopped", exc_info=True)
+        holder.stop.wait(5)
     finally:
         if sock is not None:
             sock.close()
@@ -652,6 +694,17 @@ def _start_layer(layer: dict, spec: dict, backend: str, spawn) -> _Running:
     return holder
 
 
+def finished_keys(running: dict) -> list[str]:
+    """Feeders whose thread ended on its own. A halt() is not a failure."""
+    done = []
+    for key, holder in running.items():
+        thread = getattr(holder, "thread", None)
+        if thread is None or thread.is_alive() or holder.stop.is_set():
+            continue
+        done.append(key)
+    return done
+
+
 def reconcile_once(
     state_dir: Path,
     channel_id: str,
@@ -682,6 +735,9 @@ def reconcile_once(
     owner = update_key_owner(state_dir, channel_id, needs_key)
     if owner != channel_id:
         desired = [layer for layer in desired if (layer.get("source") or {}).get("type") != "sdi-key"]
+    for key in finished_keys(running):
+        log.warning("CG feeder %s stopped; starting it again", key)
+        running.pop(key).halt()
     stop, start = plan_changes(running, desired)
     for key in stop:
         running.pop(key).halt()
