@@ -621,6 +621,69 @@ def test_main_refuses_a_missing_or_short_token(tmp_path):
     assert main(["--config", str(tmp_path / "noc.json"), "--token-file", str(token)]) == 78
 
 
+def test_effect_recall_clear_and_status(tmp_path):
+    from nexencoder.effects import delete_preset, upsert_preset
+
+    agent = _agent(tmp_path)
+    agent.html_backend = lambda: "none"
+    state = tmp_path / "state"
+    upsert_preset(state, {
+        "name": "Bug",
+        "format": "1080i59.94",
+        "in_frames": 0,
+        "out_frames": 12,
+        "layers": [],
+    })
+    upsert_preset(state, {
+        "name": "Lower",
+        "format": "1080i59.94",
+        "in_frames": 4,
+        "out_frames": 4,
+        "layers": [{"level": 1, "source": {"type": "html", "url": "https://cg.example/bug"}}],
+    })
+    httpd, port = _start(agent)
+    try:
+        status, body = _request(port, "/api/noc/v1/effects/Bug")
+        assert status == 401
+        status, body = _request(port, "/api/noc/v1/effects/Bug", token=TOKEN)
+        view = json.loads(body)
+        assert status == 200 and view["exists"] is True and view["valid"] is True and view["active"] == []
+        status, body = _request(
+            port, "/api/noc/v1/outputs/A/effects/recall", token=TOKEN, method="POST", body={"preset": "Bug"},
+        )
+        recalled = json.loads(body)
+        assert status == 200 and recalled["channel"] == "A" and recalled["preset"] == "Bug"
+        assert recalled["active"] == ["A"] and recalled["frames"] == 0
+        status, body = _request(port, "/api/noc/v1/effects/Bug", token=TOKEN)
+        assert json.loads(body)["active"] == ["A"]
+        status, body = _request(port, "/api/noc/v1/outputs/A/effects/clear", token=TOKEN, method="POST")
+        cleared = json.loads(body)
+        assert status == 200 and cleared["normalized"] is True and cleared["frames"] == 12 and cleared["active"] == []
+        status, body = _request(port, "/api/noc/v1/outputs/A/effects/recall", token=TOKEN, method="POST", body={"preset": "Missing"})
+        assert status == 400 and "unknown preset" in json.loads(body)["detail"]
+        status, body = _request(port, "/api/noc/v1/outputs/C/effects/recall", token=TOKEN, method="POST", body={"preset": "Bug"})
+        assert status == 400 and json.loads(body)["detail"] == "output must be A or B"
+        status, body = _request(port, "/api/noc/v1/effects/Lower", token=TOKEN)
+        assert "HTML renderer" in json.loads(body)["warning"]
+        status, body = _request(
+            port, "/api/noc/v1/outputs/B/effects/recall", token=TOKEN, method="POST", body={"preset": "Bug"},
+        )
+        assert status == 200 and json.loads(body)["active"] == ["B"]
+        delete_preset(state, "Bug")
+        status, body = _request(port, "/api/noc/v1/effects/Bug", token=TOKEN)
+        gone = json.loads(body)
+        assert gone["exists"] is False and gone["valid"] is False and gone["active"] == ["B"]
+        status, body = _request(port, "/api/noc/v1/effects", token=TOKEN)
+        listed = {item["name"]: item for item in json.loads(body)["effects"]}
+        assert listed["Bug"]["exists"] is False and listed["Lower"]["exists"] is True
+        status, _body = _request(port, "/api/noc/v1/effects/Bug", token=TOKEN, method="POST")
+        assert status == 405
+    finally:
+        httpd.shutdown()
+    audit = (state / "audit.log").read_text(encoding="utf-8")
+    assert "noc.effect.recall" in audit and "noc.effect.clear" in audit
+
+
 def test_load_noc_config_drops_bad_allow_entries(tmp_path):
     path = tmp_path / "noc.json"
     path.write_text(json.dumps({

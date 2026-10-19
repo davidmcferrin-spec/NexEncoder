@@ -83,7 +83,7 @@ the channel's spliceinject port. spliceinject listens on `127.0.0.1:19101` (A)
 and `:19102` (B).
 
 The Effects page grabs a clean still of the selected input every 8 seconds, so a squeeze
-and its CG layers can be lined up on the real picture and saved as a preset. Corner
+and its CG layers can be lined up on the real picture and saved as a preset. The list can delete a stored preset; the picture stays until the next recall or normalize. Corner
 positions are fractions of the frame, so a preset recalled on 720p, 1080i, or 1080p
 lands on the same part of the picture.
 `POST /api/channels/A/effects/recall` applies a preset on the running filter graph.
@@ -118,7 +118,9 @@ NexNOC polls a separate process, `python3 -m nexencoder.noc`. It is not the oper
 console. The pages are Apache on port 80, with no login. The live feed stays on
 `127.0.0.1:8788`. The agent listens on
 `0.0.0.0:8790` (override in `/etc/nexencoder/noc.json`) and requires a bearer token
-from `/etc/nexencoder/noc.token`. The contract, example payloads, TLS, and the
+from `/etc/nexencoder/noc.token`. The same token recalls or clears a stored effect
+and reports whether that effect is on an output. Start, stop, and restart of the
+two channel units are on that agent as well. The contract, example payloads, TLS, and the
 install and token-rotation steps are in [docs/NOC-AGENT-API.md](docs/NOC-AGENT-API.md).
 
 `setup.sh` creates the `nexencoder` system user, the token file (mode 640), a polkit

@@ -2,7 +2,8 @@
 
 The operator console on 127.0.0.1 stays unchanged and unauthenticated. This
 process is the one NexNOC calls over the WAN. Every route under /api/noc/v1
-requires a bearer token. Control is limited to the two channel units.
+requires a bearer token. Unit control is limited to the two channel units.
+Recalling or clearing a stored effect uses the same filter path as the console.
 """
 
 from __future__ import annotations
@@ -21,11 +22,13 @@ import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qsl, parse_qs, urlencode, urlsplit, urlunsplit, urlparse
+from urllib.parse import parse_qsl, parse_qs, unquote, urlencode, urlsplit, urlunsplit, urlparse
 
 from . import __version__
 from .audit import try_record
+from .cgfeed import detect_html_backend, ndi_available as ndi_receiver_available
 from .channels import CHANNELS, INPUT_SRT_PORTS, load_config
+from .effects import _load_live, load_presets, normalize_channel, recall_effect
 from .hoststats import HostCollector, parse_uptime
 from .pipeline import (
     AUDIO_BITRATE_BPS,
@@ -621,6 +624,8 @@ class Agent:
         proc_root: Path | None = None,
         wall=None,
         hostname: str | None = None,
+        html_backend=None,
+        ndi_ready=None,
     ) -> None:
         self.token = token
         self.noc = noc
@@ -634,6 +639,8 @@ class Agent:
         self.hostname = hostname or socket.gethostname()
         self.allow = list(noc.get("allow") or [])
         self.trust_proxy = bool(noc.get("trust_proxy"))
+        self.html_backend = html_backend or detect_html_backend
+        self.ndi_ready = ndi_ready or ndi_receiver_available
 
     def identity(self, uptime: int | None) -> dict:
         return {
@@ -880,6 +887,116 @@ class Agent:
             "outputs": results,
         }
 
+    def _preset_name(self, name: str) -> str:
+        text = unquote(name).strip()
+        if not text or len(text) > 64 or any(ord(ch) < 32 or ch in "/\\" for ch in text):
+            raise NocError(400, "bad_request", "preset name must be 1 to 64 characters")
+        return text
+
+    def _active_channels(self, name: str) -> list[str]:
+        found = []
+        for channel_id in CHANNELS:
+            live = _load_live(self.state_dir, channel_id)
+            if live.get("preset") == name:
+                found.append(channel_id)
+        return found
+
+    def _effect_warning(self, preset: dict | None) -> str:
+        if not preset:
+            return ""
+        notes = []
+        layers = preset.get("layers") or []
+        html = any(
+            isinstance(layer, dict) and isinstance(layer.get("source"), dict) and layer["source"].get("type") == "html"
+            for layer in layers
+        )
+        ndi = any(
+            isinstance(layer, dict) and isinstance(layer.get("source"), dict) and layer["source"].get("type") == "ndi"
+            for layer in layers
+        )
+        if html and self.html_backend() == "none":
+            notes.append("HTML renderer is not installed; those layers stay transparent")
+        if ndi and not self.ndi_ready():
+            notes.append("NDI receiver is not installed; those layers stay transparent")
+        return " ".join(notes)
+
+    def _effect_view(self, name: str, preset: dict | None) -> dict:
+        return {
+            "name": name,
+            "exists": preset is not None,
+            "valid": preset is not None,
+            "active": self._active_channels(name),
+            "format": preset["format"] if preset else "",
+            "warning": self._effect_warning(preset),
+        }
+
+    def effects(self) -> dict:
+        presets = load_presets(self.state_dir)
+        by_name = {item["name"]: item for item in presets}
+        names = list(by_name)
+        for channel_id in CHANNELS:
+            live = _load_live(self.state_dir, channel_id)
+            preset = live.get("preset")
+            if isinstance(preset, str) and preset and preset not in by_name:
+                by_name[preset] = None
+                names.append(preset)
+        return {
+            "ok": True,
+            "api_version": API_VERSION,
+            "effects": [self._effect_view(name, by_name[name]) for name in names],
+        }
+
+    def effect_status(self, name: str) -> dict:
+        text = self._preset_name(name)
+        match = next((item for item in load_presets(self.state_dir) if item["name"] == text), None)
+        return {"ok": True, "api_version": API_VERSION, **self._effect_view(text, match)}
+
+    def effect_command(self, channel_id: str, action: str, body: dict, caller: str) -> dict:
+        if channel_id not in CHANNELS:
+            raise NocError(400, "bad_request", "output must be A or B")
+        if action not in {"recall", "clear"}:
+            raise NocError(400, "bad_request", "effect action must be recall or clear")
+        config = load_config(self.encoder_config)
+        try:
+            if action == "clear":
+                result = normalize_channel(self.state_dir, channel_id, {}, config)
+                preset_name = ""
+            else:
+                raw_name = body.get("preset")
+                if not isinstance(raw_name, str):
+                    raise NocError(400, "bad_request", "recall needs a preset name")
+                preset_name = self._preset_name(raw_name)
+                result = recall_effect(self.state_dir, channel_id, {"preset": preset_name}, config)
+        except NocError:
+            raise
+        except ValueError as exc:
+            raise NocError(400, "bad_request", str(exc)) from exc
+        match = next((item for item in load_presets(self.state_dir) if item["name"] == preset_name), None) if preset_name else None
+        warning = self._effect_warning(match)
+        record = {
+            "caller": caller,
+            "channel": channel_id,
+            "preset": preset_name,
+            "frames": result.get("frames"),
+            "ok": True,
+        }
+        try_record(self.state_dir, "noc.effect." + action, record)
+        payload = {
+            "ok": True,
+            "api_version": API_VERSION,
+            "action": action,
+            "channel": channel_id,
+            "preset": preset_name,
+            "frames": result.get("frames"),
+            "active": self._active_channels(preset_name) if preset_name else [],
+            "caller": caller,
+        }
+        if warning:
+            payload["warning"] = warning
+        if action == "clear":
+            payload["normalized"] = True
+        return payload
+
 
 def _query_has_secret(query: str) -> bool:
     for key in parse_qs(query, keep_blank_values=True):
@@ -966,13 +1083,22 @@ def make_handler(agent: Agent):
             return payload
 
         def _known_method(self, method: str, parts: list[str]) -> str | None:
-            if parts == ["health"] or parts == ["status"]:
+            if parts == ["health"] or parts == ["status"] or parts == ["effects"]:
+                return "GET"
+            if len(parts) == 2 and parts[0] == "effects":
                 return "GET"
             if parts == ["control"]:
                 return "POST"
             if len(parts) == 2 and parts[0] == "outputs" and parts[1] in CONTROL_ACTIONS:
                 return "POST"
             if len(parts) == 3 and parts[0] == "outputs" and parts[2] in CONTROL_ACTIONS:
+                return "POST"
+            if (
+                len(parts) == 4
+                and parts[0] == "outputs"
+                and parts[2] == "effects"
+                and parts[3] in {"recall", "clear"}
+            ):
                 return "POST"
             return None
 
@@ -1005,12 +1131,18 @@ def make_handler(agent: Agent):
                     self._json(200, agent.health())
                 elif tail == ["status"]:
                     self._json(200, agent.status(self._preview_host()))
+                elif tail == ["effects"]:
+                    self._json(200, agent.effects())
+                elif len(tail) == 2 and tail[0] == "effects":
+                    self._json(200, agent.effect_status(tail[1]))
                 elif tail == ["control"]:
                     body = self._body()
                     action = body.get("action")
                     if not isinstance(action, str):
                         raise NocError(400, "bad_request", "action must be start, stop, or restart")
                     self._finish_control(agent.control(action, body.get("outputs", "all"), caller))
+                elif len(tail) == 4 and tail[2] == "effects":
+                    self._json(200, agent.effect_command(unquote(tail[1]), tail[3], self._body(), caller))
                 elif len(tail) == 2:
                     self._finish_control(agent.control(tail[1], "all", caller))
                 else:

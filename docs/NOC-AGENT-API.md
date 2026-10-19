@@ -120,6 +120,26 @@ Control returns 200 when every requested unit accepted the action, and 502 when 
 call failed. The body still lists each output's resulting state. `systemctl start`
 on an already-active unit is success.
 
+Stored effects use the same recall and normalize path as the Effects page. They do
+not restart the channel. The bearer token stays in the `Authorization` header.
+Bitfocus Companion and the Stream Deck API Request action can send that header.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/noc/v1/effects` | Every stored preset, plus a name that is still on air after its store was deleted. |
+| GET | `/api/noc/v1/effects/Bug` | One preset. `exists` and `valid` are true when the store loads. `active` lists outputs whose live preset is this name. A missing name is 200 with both flags false. |
+| POST | `/api/noc/v1/outputs/A/effects/recall` | Body `{"preset":"Bug"}`. Also `B`. |
+| POST | `/api/noc/v1/outputs/A/effects/clear` | Normalize that output. The body may be empty. |
+
+`warning` is set when the preset uses an HTML layer and no renderer is installed, or an
+NDI layer and `ndisrc` is missing. The recall still applies; that layer stays transparent.
+`valid` stays true. Percent-encode a preset name that contains a space on the GET path.
+A slash in the name is rejected.
+
+```json
+{"ok": true, "name": "Bug", "exists": true, "valid": true, "active": ["A"], "format": "1080i59.94", "warning": ""}
+```
+
 Every control attempt is logged at info with the caller address, the action, the
 output ids, and the result. That includes rejected ids.
 

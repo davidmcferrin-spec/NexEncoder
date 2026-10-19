@@ -126,6 +126,7 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     assert 'value="36"' in page and 'value="all"' in page
     effects = (WEB / "assets" / "effects.js").read_text(encoding="utf-8")
     assert "/admin/preset.php" in effects and "/admin/recall.php" in effects
+    assert "delete: true" in effects and "Delete preset " in effects
     assert "/live/still.php" in effects
     assert "LAYER_SLOTS = 2" in effects and "fitStage" in effects
     effects_page = (WEB / "effects.php").read_text(encoding="utf-8")

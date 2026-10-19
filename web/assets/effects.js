@@ -441,8 +441,23 @@
           .then(function (body) { note(true, recalled(body)); })
           .catch(function (err) { note(false, err.message); });
       });
+      var remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "btn-text";
+      remove.textContent = "Delete";
+      remove.addEventListener("click", function () {
+        if (!window.confirm("Delete preset " + preset.name + "? The picture stays until you recall or normalize.")) return;
+        post("/admin/preset.php", { delete: true, name: preset.name }).then(function (body) {
+          renderPresets(body.presets || []);
+          note(true, "Deleted " + preset.name + ".");
+        }).catch(function (err) { note(false, err.message); });
+      });
+      var actions = document.createElement("span");
+      actions.className = "preset-actions";
+      actions.appendChild(recall);
+      actions.appendChild(remove);
       item.appendChild(name);
-      item.appendChild(recall);
+      item.appendChild(actions);
       list.appendChild(item);
     });
   }
