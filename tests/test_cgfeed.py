@@ -8,6 +8,7 @@ import threading
 import types
 import time
 import zlib
+from pathlib import Path
 
 from nexencoder.cgfeed import (
     PngPipe,
@@ -502,3 +503,15 @@ def test_missing_png_decoder_is_noticed_and_remembered(monkeypatch, caplog):
         assert cgfeed.ffmpeg_decodes_png(lambda *a, **k: types.SimpleNamespace(stdout=b" V....D mjpeg  Motion JPEG\n")) is False
     assert "no png decoder" in caplog.text
     monkeypatch.setattr(cgfeed, "_PNG_DECODER", None)
+
+
+def test_filter_keeps_a_layer_through_a_rewrite_and_skips_hidden_work():
+    source = (Path(__file__).resolve().parent.parent / "nexencoder" / "vf_nexeffect.c").read_text(encoding="utf-8")
+    # A slot being rewritten shows the last frame, and an unchanged slot is not re-read.
+    assert "static const uint8_t *slot_frame(" in source
+    assert "return same ? s->slot_cache[index] : NULL;" in source
+    assert "if (seen && *seen == seq1)" in source
+    assert "if (!read_layer(s->slots[index].path" not in source
+    # Live video that fills the frame is copied, and the waiting picture is not painted under it.
+    assert "if (!covered)\n        paint_waiting" in source.replace("\r\n", "\n")
+    assert "memcpy(dst, video, pixels * 4);" in source

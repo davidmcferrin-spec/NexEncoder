@@ -243,6 +243,9 @@ PAGE_GRACE = 4.0
 # Frames asked of Chrome per second. A screenshot takes as long as it takes, so
 # this is a ceiling; the layer runs at whatever the host can paint.
 CAPTURE_FPS = 30
+# A page that has not changed is polled slowly, so a static bug costs the host
+# almost nothing. Motion brings the full rate back on the next frame.
+STILL_FPS = 5
 DECODER_BACKLOG = 60
 FPS_REPORT_FIRST = 10.0
 FPS_REPORT_EVERY = 120.0
@@ -992,6 +995,8 @@ def run_chromium_feeder(
         reported = 0
         sent = 0
         decoded = 0
+        last_frame = ""
+        still = False
         while not holder.stop.is_set():
             started = time.monotonic()
             # A renderer that never answers would otherwise hold the layer
@@ -1003,7 +1008,9 @@ def run_chromium_feeder(
                 "optimizeForSpeed": True,
             }, session_id, deadline=started + SCREENSHOT_WAIT)
             frame = result.get("data")
-            if isinstance(frame, str):
+            still = isinstance(frame, str) and frame == last_frame
+            if isinstance(frame, str) and not still:
+                last_frame = frame
                 png = base64.b64decode(frame)
                 got_w, got_h = png_size(png)
                 if (got_w, got_h) == (writer.width, writer.height):
@@ -1034,7 +1041,7 @@ def run_chromium_feeder(
                 reported = done
                 painted_at = now
                 report_at = now + FPS_REPORT_EVERY
-            remain = max(0.0, (1 / CAPTURE_FPS) - (now - started))
+            remain = max(0.0, (1 / (STILL_FPS if still else CAPTURE_FPS)) - (now - started))
             if remain and holder.stop.wait(remain):
                 break
     except OSError as exc:

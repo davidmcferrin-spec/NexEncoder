@@ -69,6 +69,10 @@ typedef struct NexEffectContext {
     uint8_t *field_src;
     uint8_t *field_warp;
     uint8_t *layer;
+    uint8_t *slot_cache[NX_SLOTS];
+    uint32_t slot_seq[NX_SLOTS];
+    int slot_cached[NX_SLOTS];
+    char slot_cache_path[NX_SLOTS][768];
     char run_path[1024];
     char run_tmp[1024];
 } NexEffectContext;
@@ -213,14 +217,15 @@ static void warp_rgba(const uint8_t *src, uint8_t *dst, int w, int h, const doub
 
 static void over_pixel(uint8_t *dst, const uint8_t *src)
 {
-    double sa = src[3] / 255.0;
+    double sa;
     int c;
-    if (sa <= 0)
+    if (src[3] == 0)
         return;
-    if (sa >= 1) {
+    if (src[3] == 255) {
         memcpy(dst, src, 4);
         return;
     }
+    sa = src[3] / 255.0;
     for (c = 0; c < 3; c++)
         dst[c] = (uint8_t)(src[c] * sa + dst[c] * (1.0 - sa) + 0.5);
     dst[3] = (uint8_t)FFMIN(255, (int)(src[3] + dst[3] * (1.0 - sa) + 0.5));
@@ -378,7 +383,11 @@ static void unpremultiply(uint8_t *px, int w, int h)
     }
 }
 
-static int read_layer(const char *path, int w, int h, uint8_t *dst)
+/* Returns 1 for a new frame in dst, 2 when the slot still holds the frame
+ * numbered *seen (dst is untouched), and 0 when nothing consistent could be
+ * read. A writer mid-update gives 0. Callers that keep the last frame show it
+ * instead of dropping the layer for that video frame. */
+static int read_layer_seq(const char *path, int w, int h, uint8_t *dst, uint32_t *seen)
 {
     FILE *file;
     uint8_t header[NX_HEADER];
@@ -405,6 +414,10 @@ static int read_layer(const char *path, int w, int h, uint8_t *dst)
                  ((uint32_t)header[14] << 16) | ((uint32_t)header[15] << 24);
         if ((seq1 & 1u) || seq1 == 0 || width != (uint32_t)w || height != (uint32_t)h)
             break;
+        if (seen && *seen == seq1) {
+            fclose(file);
+            return 2;
+        }
         bytes = (size_t)w * h * 4;
         if (fread(dst, 1, bytes, file) != bytes)
             break;
@@ -417,12 +430,19 @@ static int read_layer(const char *path, int w, int h, uint8_t *dst)
                              ((uint32_t)header[22] << 16) | ((uint32_t)header[23] << 24);
             if (flags & 1u)
                 unpremultiply(dst, w, h);
+            if (seen)
+                *seen = seq1;
             fclose(file);
             return 1;
         }
     }
     fclose(file);
     return 0;
+}
+
+static int read_layer(const char *path, int w, int h, uint8_t *dst)
+{
+    return read_layer_seq(path, w, h, dst, NULL) == 1;
 }
 
 static int read_flag_file(const char *path, int fallback)
@@ -647,6 +667,38 @@ static void paint_waiting(uint8_t *dst, int w, int h, NexEffectContext *s)
     draw_slate(dst, w, h);
 }
 
+static void draw_video(uint8_t *dst, const uint8_t *video, size_t pixels, int covered)
+{
+    size_t i;
+    if (covered) {
+        memcpy(dst, video, pixels * 4);
+        return;
+    }
+    for (i = 0; i < pixels; i++)
+        over_pixel(dst + i * 4, video + i * 4);
+}
+
+/* The newest consistent frame of a layer slot. The HTML feeder rewrites its
+ * file about fifteen times a second while the picture runs at sixty, so many
+ * video frames land on a rewrite. Those show the previous frame instead of
+ * losing the layer, and an unchanged slot costs a header read, not 8 MB. */
+static const uint8_t *slot_frame(NexEffectContext *s, int index, int w, int h)
+{
+    const char *path = s->slots[index].path;
+    int same = s->slot_cached[index] && !strcmp(s->slot_cache_path[index], path);
+    uint32_t seen = same ? s->slot_seq[index] : 0;
+    if (read_layer_seq(path, w, h, s->layer, &seen) == 1) {
+        uint8_t *spare = s->slot_cache[index];
+        s->slot_cache[index] = s->layer;
+        s->layer = spare;
+        s->slot_seq[index] = seen;
+        s->slot_cached[index] = 1;
+        snprintf(s->slot_cache_path[index], sizeof s->slot_cache_path[index], "%s", path);
+        return s->slot_cache[index];
+    }
+    return same ? s->slot_cache[index] : NULL;
+}
+
 static void composite(uint8_t *dst, const uint8_t *video, int w, int h,
                       NexEffectContext *s)
 {
@@ -655,10 +707,15 @@ static void composite(uint8_t *dst, const uint8_t *video, int w, int h,
     int order[NX_SLOTS];
     int count = 0;
     int n, j, drawn_video = 0;
-    paint_waiting(dst, w, h, s);
+    /* Live video that fills the frame hides the waiting picture. */
+    int covered = s->signal_ok && corners_identity(s->current, w, h);
+    if (!covered)
+        paint_waiting(dst, w, h, s);
     for (n = 0; n < NX_SLOTS; n++) {
         if (s->slots[n].level != 0)
             order[count++] = n;
+        else
+            s->slot_cached[n] = 0;
     }
     for (n = 1; n < count; n++) {
         int item = order[n];
@@ -671,20 +728,19 @@ static void composite(uint8_t *dst, const uint8_t *video, int w, int h,
     }
     for (n = 0; n < count; n++) {
         int index = order[n];
+        const uint8_t *layer;
         if (!drawn_video && s->signal_ok && s->slots[index].level > 0) {
-            for (i = 0; i < pixels; i++)
-                over_pixel(dst + i * 4, video + i * 4);
+            draw_video(dst, video, pixels, covered);
             drawn_video = 1;
         }
-        if (!read_layer(s->slots[index].path, w, h, s->layer))
+        layer = slot_frame(s, index, w, h);
+        if (!layer)
             continue;
         for (i = 0; i < pixels; i++)
-            over_pixel(dst + i * 4, s->layer + i * 4);
+            over_pixel(dst + i * 4, layer + i * 4);
     }
-    if (!drawn_video && s->signal_ok) {
-        for (i = 0; i < pixels; i++)
-            over_pixel(dst + i * 4, video + i * 4);
-    }
+    if (!drawn_video && s->signal_ok)
+        draw_video(dst, video, pixels, covered);
     if (s->bars) {
         draw_bars(dst, w, h);
         if (s->ident[0] && strcmp(s->ident, "-"))
@@ -725,6 +781,7 @@ static int config_input(AVFilterLink *inlink)
     AVFilterContext *ctx = inlink->dst;
     NexEffectContext *s = ctx->priv;
     size_t bytes;
+    int i;
     if (inlink->format != AV_PIX_FMT_YUV420P)
         return AVERROR(EINVAL);
     if (inlink->w < 2 || inlink->h < 2 || inlink->w > 2048 || inlink->h > 1088)
@@ -740,6 +797,12 @@ static int config_input(AVFilterLink *inlink)
     s->field_src = av_malloc(bytes / 2 + 4);
     s->field_warp = av_malloc(bytes / 2 + 4);
     s->layer = av_malloc(bytes);
+    for (i = 0; i < NX_SLOTS; i++) {
+        s->slot_cache[i] = av_malloc(bytes);
+        s->slot_cached[i] = 0;
+        if (!s->slot_cache[i])
+            return AVERROR(ENOMEM);
+    }
     if (!s->rgba || !s->warped || !s->comp || !s->field_src || !s->field_warp || !s->layer)
         return AVERROR(ENOMEM);
     s->sws_to = sws_getContext(s->width, s->height, AV_PIX_FMT_YUV420P,
@@ -863,6 +926,8 @@ static av_cold void uninit(AVFilterContext *ctx)
     av_freep(&s->field_src);
     av_freep(&s->field_warp);
     av_freep(&s->layer);
+    for (int i = 0; i < NX_SLOTS; i++)
+        av_freep(&s->slot_cache[i]);
 }
 
 static const AVFilterPad inputs[] = {
