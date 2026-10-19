@@ -136,4 +136,8 @@ def test_apache_serves_pages_and_php_forwards_admin_actions():
     assert 'id="restart-A"' in inputs and 'id="restart-B"' in inputs
     assert "nexencoder-channel@" in js
     assert "/live/decklink.php" in (WEB / "assets" / "console.js").read_text(encoding="utf-8")
-    assert "/api/" not in (WEB / "assets" / "metrics.js").read_text(encoding="utf-8")
+    metrics = (WEB / "assets" / "metrics.js").read_text(encoding="utf-8")
+    assert "/api/" not in metrics
+    assert "Field rate" in metrics and "Raster" in metrics
+    assert "color-scheme: normal" in (WEB / "assets" / "encoder.css").read_text(encoding="utf-8")
+    assert "color-scheme: normal" in (WEB / "cg" / "bug.html").read_text(encoding="utf-8")

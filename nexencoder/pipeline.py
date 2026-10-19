@@ -258,6 +258,8 @@ def preview_argv(channel_id: str, ffmpeg: str = "ffmpeg") -> list[str]:
         "-profile:v", "baseline", "-pix_fmt", "yuv420p", "-g", "30", "-b:v", "1500k",
         "-c:a", "libopus", "-b:a", "96k", "-ar", "48000", "-ac", "2", "-application", "lowdelay",
         "-f", "rtsp", "-rtsp_transport", "tcp",
+        # MediaMTX remuxes anything over 1440 bytes and the preview was sending 1460.
+        "-pkt_size", "1316",
         preview_rtsp(channel_id),
     ]
 

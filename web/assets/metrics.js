@@ -174,6 +174,31 @@
     if (note) note.textContent = text;
   }
 
+  var INFO_TITLES = {
+    input: "Input",
+    output: "Output",
+    format: "Format",
+    scan: "Scan",
+    audio: "Audio",
+    mode: "Delivery",
+    raster: "Raster",
+    field_rate_hz: "Field rate"
+  };
+
+  function infoValue(key, value) {
+    if (key === "raster") return String(value).replace("x", "\u00d7");
+    if (key === "field_rate_hz") return value + " Hz";
+    return value;
+  }
+
+  function infoList(labels) {
+    return "<dl class=\"channel-meta\">" + Object.keys(labels).map(function (key) {
+      if (key === "__name__") return "";
+      var title = INFO_TITLES[key] || key;
+      return "<div><dt>" + esc(title) + "</dt><dd>" + esc(infoValue(key, labels[key])) + "</dd></div>";
+    }).join("") + "</dl>";
+  }
+
   function renderCard(card, samples) {
     var value = document.querySelector('[data-value="' + card.id + '"]');
     var canvas = document.querySelector('[data-canvas="' + card.id + '"]');
@@ -184,10 +209,7 @@
         return;
       }
       host.innerHTML = samples.map(function (sample) {
-        var bits = Object.keys(sample.labels).map(function (key) {
-          return "<div><dt>" + esc(key) + "</dt><dd>" + esc(sample.labels[key]) + "</dd></div>";
-        }).join("");
-        return '<dl class="channel-meta">' + bits + "</dl>";
+        return infoList(sample.labels);
       }).join("");
       return;
     }
@@ -384,9 +406,7 @@
       promGet("instant", selectedName).then(function (payload) {
         var rows = matrix(payload) || [];
         info.innerHTML = rows.length ? rows.map(function (row) {
-          return "<dl class=\"channel-meta\">" + Object.keys(row.labels).map(function (key) {
-            return "<div><dt>" + esc(key) + "</dt><dd>" + esc(row.labels[key]) + "</dd></div>";
-          }).join("") + "</dl>";
+          return infoList(row.labels);
         }).join("") : "<p class=\"muted\">No samples yet</p>";
         draw(canvas, [], "gauge");
       });

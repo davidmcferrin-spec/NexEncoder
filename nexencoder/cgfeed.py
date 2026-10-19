@@ -220,7 +220,11 @@ def chromium_argv(browser: str, port: int, url: str, width: int, height: int) ->
     return [
         browser, "--headless=new", "--disable-gpu", "--hide-scrollbars",
         "--no-sandbox", "--disable-dev-shm-usage",
-        "--no-first-run", "--force-device-scale-factor=1",
+        "--no-first-run", "--no-default-browser-check",
+        "--disable-background-networking", "--disable-sync",
+        "--disable-component-update", "--disable-default-apps", "--disable-breakpad",
+        "--disable-features=Translate,MediaRouter,OptimizationHints",
+        "--force-device-scale-factor=1",
         "--default-background-color=00000000",
         f"--user-data-dir=/var/lib/nexencoder/chrome/{port}",
         f"--remote-debugging-port={port}",
@@ -492,10 +496,15 @@ def run_chromium_feeder(
 ) -> None:
     """Paint one HTML URL with Chromium and write BGRA frames into the slot."""
     port = _free_port()
+    # Headless Chrome has no session bus. Pointing it at one fills the journal
+    # and the background services add load next to the capture.
+    env = os.environ.copy()
+    env["DBUS_SESSION_BUS_ADDRESS"] = "disabled:"
     proc = spawn(
         chromium_argv(browser, port, url, writer.width, writer.height),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
+        env=env,
     )
     holder.proc = proc
     if proc.stderr is not None:
@@ -568,8 +577,10 @@ def run_chromium_feeder(
                         writer.write(pixels)
                     else:
                         log.warning("HTML frame is %s bytes, slot wants %s", len(pixels), writer.nbytes)
-            remain = (1 / 30) - (time.monotonic() - started)
-            if remain > 0 and holder.stop.wait(remain):
+            # Ten frames a second is enough for a bug. A tighter loop keeps
+            # Chrome busy and the DeckLink capture overruns.
+            remain = max(0.05, (1 / 10) - (time.monotonic() - started))
+            if holder.stop.wait(remain):
                 break
     finally:
         if sock is not None:

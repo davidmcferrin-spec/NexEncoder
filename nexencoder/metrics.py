@@ -109,9 +109,6 @@ CATALOG: tuple[dict[str, object], ...] = (
     {"id": "up", "group": "encoder", "title": "Process", "unit": "", "kind": "gauge", "query": "nexencoder_up"},
     {"id": "input-up", "group": "encoder", "title": "Input signal", "unit": "", "kind": "gauge", "query": "nexencoder_input_up"},
     {"id": "input-info", "group": "encoder", "title": "Input format", "unit": "", "kind": "info", "query": "nexencoder_input_info"},
-    {"id": "input-size", "group": "encoder", "title": "Input resolution", "unit": "px", "kind": "gauge", "query": "nexencoder_input_width"},
-    {"id": "input-height", "group": "encoder", "title": "Input height", "unit": "px", "kind": "gauge", "query": "nexencoder_input_height"},
-    {"id": "input-rate", "group": "encoder", "title": "Field rate", "unit": "Hz", "kind": "gauge", "query": "nexencoder_input_field_rate_hz"},
     {"id": "captions", "group": "encoder", "title": "Captions", "unit": "", "kind": "gauge", "query": "nexencoder_input_captions_up"},
     {"id": "scte", "group": "encoder", "title": "SCTE-104 messages", "unit": "", "kind": "counter", "query": "nexencoder_input_scte104_messages_total"},
     {"id": "output-up", "group": "encoder", "title": "Output pipeline", "unit": "", "kind": "gauge", "query": "nexencoder_output_up"},
@@ -119,8 +116,6 @@ CATALOG: tuple[dict[str, object], ...] = (
     {"id": "output-info", "group": "encoder", "title": "Delivery", "unit": "", "kind": "info", "query": "nexencoder_output_info"},
     {"id": "bitrate", "group": "encoder", "title": "Video bitrate", "unit": "bps", "kind": "gauge", "query": "nexencoder_output_video_bitrate_bps"},
     {"id": "bitrate-target", "group": "encoder", "title": "Target bitrate", "unit": "bps", "kind": "gauge", "query": "nexencoder_output_video_bitrate_target_bps"},
-    {"id": "output-width", "group": "encoder", "title": "Output width", "unit": "px", "kind": "gauge", "query": "nexencoder_output_width"},
-    {"id": "output-height", "group": "encoder", "title": "Output height", "unit": "px", "kind": "gauge", "query": "nexencoder_output_height"},
     {"id": "drops", "group": "encoder", "title": "Dropped frames", "unit": "", "kind": "counter", "query": "nexencoder_output_dropped_frames_total"},
     {"id": "rtt", "group": "encoder", "title": "SRT round-trip", "unit": "s", "kind": "gauge", "query": "nexencoder_output_rtt_seconds"},
     {"id": "loss", "group": "encoder", "title": "SRT packets lost", "unit": "", "kind": "counter", "query": "nexencoder_output_packets_lost_total"},
@@ -129,6 +124,21 @@ CATALOG: tuple[dict[str, object], ...] = (
 
 def _esc(value: str) -> str:
     return value.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+
+
+def _label_num(value: float) -> str:
+    text = f"{float(value):.6f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _raster_labels(width: int | None, height: int | None, field_rate_hz: float | None) -> dict[str, str]:
+    """One locked raster. These are not time series."""
+    labels: dict[str, str] = {}
+    if width is not None and height is not None:
+        labels["raster"] = f"{int(width)}x{int(height)}"
+    if field_rate_hz is not None:
+        labels["field_rate_hz"] = _label_num(field_rate_hz)
+    return labels
 
 
 def _num(value: float) -> str:
@@ -183,6 +193,7 @@ def render_metrics(snapshot: Snapshot | None = None) -> str:
             "format": item.format_name,
             "scan": item.scan,
             "audio": item.audio,
+            **_raster_labels(item.width, item.height, item.field_rate_hz),
         })
         out.optional("nexencoder_input_width", item.width, labels)
         out.optional("nexencoder_input_height", item.height, labels)
@@ -204,7 +215,11 @@ def render_metrics(snapshot: Snapshot | None = None) -> str:
         labels = {"output": item.output_id}
         out.sample("nexencoder_output_up", 1 if item.up else 0, labels)
         out.sample("nexencoder_output_connected", 1 if item.connected else 0, labels)
-        out.sample("nexencoder_output_info", 1, {"output": item.output_id, "mode": item.mode})
+        out.sample("nexencoder_output_info", 1, {
+            "output": item.output_id,
+            "mode": item.mode,
+            **_raster_labels(item.width, item.height, None),
+        })
         out.optional("nexencoder_output_video_bitrate_bps", item.video_bitrate_bps, labels)
         out.optional("nexencoder_output_video_bitrate_target_bps", item.video_bitrate_target_bps, labels)
         out.optional("nexencoder_output_width", item.width, labels)

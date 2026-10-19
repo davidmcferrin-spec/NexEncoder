@@ -82,6 +82,7 @@ def test_png_alpha_becomes_straight_bgra():
 def test_chromium_capture_keeps_a_transparent_background():
     argv = chromium_argv("chromium", 9222, "http://127.0.0.1:8788/cg/bug.html", 1280, 720)
     assert "--default-background-color=00000000" in argv
+    assert "--disable-background-networking" in argv
     assert "--no-sandbox" in argv
     assert "--user-data-dir=/var/lib/nexencoder/chrome/9222" in argv
     assert "jpeg" not in " ".join(argv)

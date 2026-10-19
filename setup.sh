@@ -106,6 +106,8 @@ allow_firewall() {
   $SUDO ufw allow 80/tcp >/dev/null
   $SUDO ufw allow 8889/tcp >/dev/null
   $SUDO ufw allow 8889/udp >/dev/null
+  # MediaMTX announces WebRTC on TCP 8889 and carries the picture on UDP 8189.
+  $SUDO ufw allow 8189/udp >/dev/null
   $SUDO ufw allow 8790/tcp >/dev/null
   local ports port
   ports="$(python3 -c '
@@ -128,7 +130,7 @@ print(" ".join(str(port) for port in sorted(ports)))
     $SUDO ufw allow "${port}/udp" >/dev/null
   done
   $SUDO ufw --force enable >/dev/null
-  log "ufw allows OpenSSH, 80/tcp, 8889, 8790/tcp, and SRT udp ${ports}"
+  log "ufw allows OpenSSH, 80/tcp, 8889, 8189/udp, 8790/tcp, and SRT udp ${ports}"
 }
 
 pin_listen() {

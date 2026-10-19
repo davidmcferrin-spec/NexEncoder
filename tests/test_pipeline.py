@@ -99,6 +99,7 @@ def test_preview_decodes_the_program_feed():
     assert "decklink" not in argv
     assert argv[argv.index("-f") + 1] == "mpegts"
     assert argv[-1] == "rtsp://127.0.0.1:8554/inputA"
+    assert argv[argv.index("-pkt_size") + 1] == "1316"
     assert "libopus" in argv
     assert "yadif=" in argv[argv.index("-vf") + 1]
     other = preview_argv("B")

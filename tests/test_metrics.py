@@ -30,6 +30,8 @@ def test_measured_values_and_label_escaping():
     )
     text = render_metrics(snap)
     assert 'format="1080i \\"main\\""' in text
+    assert 'raster="1920x1080"' in text
+    assert 'field_rate_hz="59.94"' in text
     assert 'nexencoder_input_width{input="A"} 1920' in text
     assert 'nexencoder_input_field_rate_hz{input="A"} 59.94' in text
     assert 'nexencoder_output_video_bitrate_bps{output="A"} 8000000' in text

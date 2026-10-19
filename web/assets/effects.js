@@ -188,6 +188,9 @@
         node = document.createElement("iframe");
         node.src = previewUrl(layer.url);
         node.title = "CG layer " + levelLabel(layer.level);
+        node.setAttribute("allowtransparency", "true");
+        node.style.colorScheme = "normal";
+        node.style.backgroundColor = "transparent";
       } else if (layer.type === "sdi-key") {
         node = document.createElement("div");
         node.className = "sdi-plate";

@@ -250,6 +250,7 @@ button.unit-row.is-selected,
   height: 100%;
   border: 0;
   background: transparent;
+  color-scheme: normal;
 }
 .sdi-plate {
   display: flex;

@@ -7,6 +7,7 @@ rtmp: false
 hls: false
 webrtc: true
 webrtcAddress: :8889
+webrtcLocalUDPAddress: :8189
 api: false
 
 paths:
