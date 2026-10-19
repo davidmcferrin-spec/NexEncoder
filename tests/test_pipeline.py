@@ -9,6 +9,9 @@ import pytest
 from nexencoder import scte104 as s104
 from nexencoder.channel import (
     EXIT_CONFIG,
+    _consume_still,
+    clear_progress,
+    note_progress,
     open_progress_pipe,
     pop_jpegs,
     progress_target,
@@ -54,12 +57,15 @@ def test_capture_keeps_vanc_and_leaves_the_monitor_off_this_process():
     assert "image2pipe" in argv
     assert "pipe:4" in argv
     assert not any(str(item).endswith(".jpg") for item in argv)
+    params = argv[argv.index("-x264-params") + 1]
+    assert params == "tff=1:sliced-threads=1:repeat-headers=1"
 
 
 def test_progressive_capture_skips_interlace_flags():
     argv = capture_argv("B", "DeckLink Duo (2)", "720p59.94", 12)
     assert argv[argv.index("-format_code") + 1] == "hp59"
     assert "+ildct+ilme" not in argv
+    assert argv[argv.index("-x264-params") + 1] == "sliced-threads=1:repeat-headers=1"
     assert "8554" not in " ".join(argv)
     graph = argv[argv.index("-filter_complex") + 1]
     assert "interlaced=0" in graph
@@ -321,6 +327,97 @@ def test_a_dead_monitor_does_not_restart_the_program(tmp_path):
     )
     assert code == 0
     assert len(program) == 1
+
+
+def test_note_progress_treats_a_lower_count_as_a_new_run():
+    last, advance, stalled = note_progress(944, 0, 0.0, 1.0, 15.0)
+    assert (last, stalled) == (944, False)
+    last, advance, stalled = note_progress(30, last, advance, 2.0, 15.0)
+    assert (last, advance, stalled) == (30, 2.0, False)
+    last, advance, stalled = note_progress(60, last, advance, 3.0, 15.0)
+    assert stalled is False and last == 60
+    last, advance, stalled = note_progress(60, last, advance, 18.0, 15.0)
+    assert stalled is True and last == 60
+
+
+def test_leftover_progress_does_not_kill_the_new_run(tmp_path):
+    progress = tmp_path / "state" / "A.progress"
+    progress.parent.mkdir(parents=True)
+    progress.write_text("frame=944\nprogress=continue\n", encoding="utf-8")
+    sequence = [944, 30, 60, 90, 120, 150, 180]
+    index = {"i": 0}
+    starts = []
+
+    def spawn(argv, **kwargs):
+        proc = _Alive()
+        if kwargs.get("stdout") is subprocess.PIPE:
+            proc.stdout = type("Pipe", (), {"close": lambda self: None})()
+        if argv[0] == "ffmpeg":
+            starts.append(proc)
+        return proc
+
+    state = {"t": 0.0}
+    pauses = []
+
+    def pause(seconds):
+        pauses.append(seconds)
+        state["t"] += seconds
+        if seconds == 1 and index["i"] < len(sequence):
+            progress.write_text(
+                f"frame={sequence[index['i']]}\nprogress=continue\n", encoding="utf-8",
+            )
+            index["i"] += 1
+
+    run_channel(
+        "A", tmp_path / "missing.json", tmp_path / "hls", tmp_path / "state",
+        spawn=spawn, cycles=1, install_signals=False, clock=lambda: state["t"], pause=pause,
+        notify=lambda _msg: None, stall_seconds=5,
+    )
+    assert len(starts) == 1
+    assert progress.read_text(encoding="utf-8") != "frame=944\nprogress=continue\n"
+    assert sum(1 for delay in pauses if delay == 1) >= 12
+
+
+def test_clear_progress_drops_the_previous_count(tmp_path):
+    path = tmp_path / "A.progress"
+    path.write_text("frame=944\nprogress=continue\n", encoding="utf-8")
+    clear_progress(path)
+    assert path.read_text(encoding="utf-8") == ""
+    clear_progress(None)
+
+
+def test_a_slow_still_replace_does_not_stop_the_reader(tmp_path, monkeypatch):
+    held = threading.Event()
+    release = threading.Event()
+    wrote = []
+
+    def slow(dest, frame):
+        wrote.append(frame)
+        if len(wrote) == 1:
+            held.set()
+            assert release.wait(2)
+
+    monkeypatch.setattr("nexencoder.channel.write_jpeg_atomic", slow)
+    read_fd, write_fd = os.pipe()
+    worker = threading.Thread(target=_consume_still, args=(read_fd, tmp_path / "A.jpg"), daemon=True)
+    worker.start()
+    first = b"\xff\xd8" + b"a" * 1000 + b"\xff\xd9"
+    os.write(write_fd, first)
+    assert held.wait(2)
+    rest = b"".join(b"\xff\xd8" + bytes([n]) * 80_000 + b"\xff\xd9" for n in (2, 3, 4))
+    pushed = threading.Event()
+
+    def push():
+        os.write(write_fd, rest)
+        pushed.set()
+
+    threading.Thread(target=push, daemon=True).start()
+    assert pushed.wait(1)
+    os.close(write_fd)
+    release.set()
+    worker.join(timeout=2)
+    assert not worker.is_alive()
+    assert wrote[0].startswith(b"\xff\xd8a")
 
 
 def test_still_frames_are_split_and_replaced(tmp_path):

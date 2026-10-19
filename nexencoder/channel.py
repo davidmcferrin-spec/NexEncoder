@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import queue
 import signal
 import socket
 import subprocess
@@ -56,6 +57,7 @@ EXIT_CONFIG = 78
 STALL_SECONDS = 15.0
 BACKOFF_START = 2.0
 BACKOFF_CAP = 30.0
+STILL_PIPE_BYTES = 1 << 20
 
 
 def _spawn(argv: list[str], **kwargs) -> subprocess.Popen:
@@ -81,6 +83,37 @@ def sd_notify(message: str) -> None:
 def progress_target(pipe: bool, path: Path) -> str:
     """ffmpeg -progress target. A pipe stays bounded; a file is for tests."""
     return "pipe:3" if pipe else str(path)
+
+
+def clear_progress(path: Path | None) -> None:
+    """Drop the previous run's frame count before a new encode starts."""
+    if path is None:
+        return
+    try:
+        path.write_text("", encoding="utf-8")
+    except OSError:
+        log.warning("progress %s was not cleared", path)
+
+
+def note_progress(
+    frame: int,
+    last_frame: int,
+    last_advance: float,
+    now: float,
+    stall_seconds: float,
+) -> tuple[int, float, bool]:
+    """Return ``(last_frame, last_advance, stalled)`` for this encode.
+
+    A count that goes backwards is a new process replacing a leftover file.
+    A stall is this run's own count sitting still.
+    """
+    if frame < last_frame:
+        return frame, now, False
+    if frame > last_frame:
+        return frame, now, False
+    if last_frame > 0 and now - last_advance >= stall_seconds:
+        return last_frame, last_advance, True
+    return last_frame, last_advance, False
 
 
 def _consume_progress(read_fd: int, dest: Path) -> None:
@@ -152,26 +185,77 @@ def write_jpeg_atomic(dest: Path, frame: bytes) -> None:
     tmp.replace(dest)
 
 
+def _keep_latest(pending: queue.Queue, item: bytes | None) -> None:
+    """Hold one item. A newer frame replaces one the disk writer has not taken."""
+    try:
+        pending.put_nowait(item)
+        return
+    except queue.Full:
+        pass
+    try:
+        pending.get_nowait()
+    except queue.Empty:
+        pass
+    try:
+        pending.put_nowait(item)
+    except queue.Full:
+        pass
+
+
 def _consume_still(read_fd: int, dest: Path) -> None:
-    """Write the latest clean still. A failed replace does not close the pipe."""
+    """Drain the still pipe. Disk writes stay off this read.
+
+    A slow replace used to fill the pipe and stop the program filter graph,
+    which is the DeckLink overrun. Only the latest JPEG is kept.
+    """
+    pending: queue.Queue = queue.Queue(maxsize=1)
+
+    def write_latest() -> None:
+        while True:
+            frame = pending.get()
+            if frame is None:
+                return
+            try:
+                write_jpeg_atomic(dest, frame)
+            except OSError:
+                log.warning("still %s was not replaced", dest)
+
+    threading.Thread(target=write_latest, name="nexencoder-still-disk", daemon=True).start()
     buf = b""
     try:
-        with os.fdopen(read_fd, "rb") as handle:
-            while True:
-                chunk = handle.read(65536)
-                if not chunk:
-                    break
-                buf += chunk
-                if len(buf) > 8_000_000:
-                    buf = buf[-4_000_000:]
-                frames, buf = pop_jpegs(buf)
-                for frame in frames:
-                    try:
-                        write_jpeg_atomic(dest, frame)
-                    except OSError:
-                        log.warning("still %s was not replaced", dest)
+        while True:
+            chunk = os.read(read_fd, 65536)
+            if not chunk:
+                break
+            buf += chunk
+            if len(buf) > 8_000_000:
+                buf = buf[-4_000_000:]
+            frames, buf = pop_jpegs(buf)
+            for frame in frames:
+                _keep_latest(pending, frame)
     except OSError:
         log.warning("still reader stopped", exc_info=True)
+    finally:
+        try:
+            os.close(read_fd)
+        except OSError:
+            pass
+        _keep_latest(pending, None)
+
+
+def widen_pipe(fd: int, size: int = STILL_PIPE_BYTES) -> None:
+    """Give the pipe room for one JPEG so one write cannot fill it."""
+    try:
+        import fcntl
+    except ImportError:
+        return
+    flag = getattr(fcntl, "F_SETPIPE_SZ", None)
+    if flag is None:
+        return
+    try:
+        fcntl.fcntl(fd, flag, size)
+    except OSError:
+        log.warning("still pipe was not widened")
 
 
 def _popen_with_progress(argv: list[str], dest: Path, stderr=None, still_path: Path | None = None) -> subprocess.Popen:
@@ -182,6 +266,7 @@ def _popen_with_progress(argv: list[str], dest: Path, stderr=None, still_path: P
     pass_fds = [child_fd]
     if still_path is not None:
         still_read, still_fd = open_child_pipe(STILL_FD)
+        widen_pipe(still_read)
         pass_fds.append(still_fd)
     try:
         proc = subprocess.Popen(
@@ -429,6 +514,7 @@ def run_channel(
     ran = 0
     delay = backoff_start
     while not stopping and (cycles is None or ran < cycles):
+        clear_progress(progress_file)
         started: list[subprocess.Popen] = []
         try:
             if pipe_progress and progress_file is not None and spawn is _spawn:
@@ -482,12 +568,11 @@ def run_channel(
             notify("WATCHDOG=1\n")
             frame = progress_frame(progress_file)
             now = clock()
-            if frame > last_frame:
-                last_frame = frame
-                last_advance = now
-            elif last_frame > 0 and now - last_advance >= stall_seconds:
+            last_frame, last_advance, stalled = note_progress(
+                frame, last_frame, last_advance, now, stall_seconds,
+            )
+            if stalled:
                 log.warning("channel %s stalled at frame %s", channel_id, last_frame)
-                stalled = True
                 break
         _stop_children(children, pause)
         splice_proc[0] = None

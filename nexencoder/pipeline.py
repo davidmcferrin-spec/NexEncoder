@@ -66,6 +66,20 @@ def whep_url(channel_id: str, host: str = "127.0.0.1", port: int = 8889) -> str:
     return f"http://{shown}:{port}/{preview_path(channel_id)}/whep"
 
 
+def _x264_params(mode: SignalMode) -> str:
+    """Slice threads keep zerolatency on more than one core.
+
+    Parameter sets on every IDR let the monitor join without waiting for
+    the next random-access point.
+    """
+    parts = ["sliced-threads=1", "repeat-headers=1"]
+    if mode.field == "tff":
+        parts.insert(0, "tff=1")
+    elif mode.field == "bff":
+        parts.insert(0, "bff=1")
+    return ":".join(parts)
+
+
 def _video_args(mode: SignalMode, bitrate_mbps: int) -> list[str]:
     level = h264_level(mode)
     args = [
@@ -80,11 +94,10 @@ def _video_args(mode: SignalMode, bitrate_mbps: int) -> list[str]:
         "-b:v", f"{bitrate_mbps}M",
         "-maxrate", f"{bitrate_mbps}M",
         "-bufsize", f"{bitrate_mbps * 2}M",
+        "-x264-params", _x264_params(mode),
     ]
-    if mode.field == "tff":
-        args += ["-flags", "+ildct+ilme", "-x264-params", "tff=1"]
-    elif mode.field == "bff":
-        args += ["-flags", "+ildct+ilme", "-x264-params", "bff=1"]
+    if mode.field in ("tff", "bff"):
+        args += ["-flags", "+ildct+ilme"]
     args += ["-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", str(AUDIO_RATE_HZ), "-ac", str(AUDIO_CHANNELS)]
     return args
 
