@@ -525,3 +525,10 @@ def test_filter_squeeze_only_warps_the_squeezed_box_and_caches_the_waiting_pictu
     # The slate and bars are drawn once and copied afterwards.
     assert "s->wait_cache && s->wait_kind == kind" in source
     assert "av_freep(&s->wait_cache);" in source
+
+
+def test_rectangle_squeeze_has_an_integer_fast_path():
+    source = (Path(__file__).resolve().parent.parent / "nexencoder" / "vf_nexeffect.c").read_text(encoding="utf-8")
+    assert "#define NX_MAXW 2048" in source
+    assert "col_ok[NX_MAXW]" in source
+    assert "(top * (256 - wy) + bot * wy + 32768) >> 16" in source

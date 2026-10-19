@@ -31,6 +31,7 @@
 #include "video.h"
 
 #define NX_SLOTS 2
+#define NX_MAXW 2048
 #define NX_HEADER 32
 
 typedef struct LayerSlot {
@@ -220,8 +221,52 @@ static void warp_rgba(const uint8_t *src, uint8_t *dst, int w, int h, const doub
     x_to = FFMIN(w, (int)ceil(hi_x) + 1);
     y_from = FFMAX(0, (int)floor(lo_y) - 1);
     y_to = FFMIN(h, (int)ceil(hi_y) + 1);
-    /* A plain squeeze or move has no perspective, so no divide per pixel. */
-    affine = fabs(matrix[6]) < 1e-12 && fabs(matrix[7]) < 1e-12 && fabs(matrix[8] - 1.0) < 1e-12;
+    /* A squeeze to a rectangle: source x depends only on the column and source
+     * y only on the row. Work those out once, then each pixel is integer
+     * blending. This is the common case and the one that has to hold 60 fps. */
+    if (fabs(matrix[1]) < 1e-9 && fabs(matrix[3]) < 1e-9 && fabs(matrix[6]) < 1e-12 &&
+        fabs(matrix[7]) < 1e-12 && fabs(matrix[8] - 1.0) < 1e-12 && x_to - x_from <= NX_MAXW) {
+        int col_a[NX_MAXW], col_b[NX_MAXW], col_w[NX_MAXW];
+        uint8_t col_ok[NX_MAXW];
+        for (x = x_from; x < x_to; x++) {
+            double px = matrix[0] * (x + 0.5) + matrix[2] - 0.5;
+            int k = x - x_from, x0;
+            col_ok[k] = !(px < -0.5 || px >= w - 0.5);
+            if (!col_ok[k])
+                continue;
+            x0 = (int)floor(px);
+            col_a[k] = FFMAX(x0, 0) * 4;
+            col_b[k] = FFMIN(x0 + 1, w - 1) * 4;
+            col_w[k] = (int)((px - x0) * 256.0);
+        }
+        for (y = y_from; y < y_to; y++) {
+            double py = matrix[4] * (y + 0.5) + matrix[5] - 0.5;
+            int y0, wy;
+            const uint8_t *row_a, *row_b;
+            uint8_t *out;
+            if (py < -0.5 || py >= h - 0.5)
+                continue;
+            y0 = (int)floor(py);
+            wy = (int)((py - y0) * 256.0);
+            row_a = src + (size_t)FFMAX(y0, 0) * w * 4;
+            row_b = src + (size_t)FFMIN(y0 + 1, h - 1) * w * 4;
+            out = dst + ((size_t)y * w + x_from) * 4;
+            for (x = x_from; x < x_to; x++, out += 4) {
+                int k = x - x_from, wx, c;
+                if (!col_ok[k])
+                    continue;
+                wx = col_w[k];
+                for (c = 0; c < 4; c++) {
+                    int top = row_a[col_a[k] + c] * (256 - wx) + row_a[col_b[k] + c] * wx;
+                    int bot = row_b[col_a[k] + c] * (256 - wx) + row_b[col_b[k] + c] * wx;
+                    out[c] = (uint8_t)((top * (256 - wy) + bot * wy + 32768) >> 16);
+                }
+            }
+        }
+        return;
+    }
+    /* Otherwise a move or skew has no perspective, so no divide per pixel. */
+    affine =fabs(matrix[6]) < 1e-12 && fabs(matrix[7]) < 1e-12 && fabs(matrix[8] - 1.0) < 1e-12;
     for (y = y_from; y < y_to; y++) {
         double sx = matrix[0] * (x_from + 0.5) + matrix[1] * (y + 0.5) + matrix[2];
         double sy = matrix[3] * (x_from + 0.5) + matrix[4] * (y + 0.5) + matrix[5];
