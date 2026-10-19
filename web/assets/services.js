@@ -371,4 +371,133 @@
       $("token-once").hidden = true;
     });
   }
+
+  function timezoneNote(ok, text) {
+    var error = $("timezone-error");
+    if (!error) return;
+    error.hidden = ok || !text;
+    error.textContent = ok ? "" : text;
+  }
+
+  function renderTimezone(body) {
+    var select = $("timezone");
+    var status = $("timezone-status");
+    var current = body.timezone || "";
+    var zones = body.zones || [];
+    var known = false;
+    if (!select) return;
+    select.textContent = "";
+    zones.forEach(function (zone) {
+      var option = document.createElement("option");
+      option.value = zone.id;
+      option.textContent = zone.label;
+      if (zone.id === current) {
+        option.selected = true;
+        known = true;
+      }
+      select.appendChild(option);
+    });
+    if (!known) {
+      var eastern = select.querySelector('option[value="America/New_York"]');
+      if (eastern) eastern.selected = true;
+    }
+    if (!status) return;
+    if (!body.timedatectl && body.detail) {
+      status.textContent = body.detail;
+    } else if (current && !known) {
+      status.textContent = "This host is " + current + ".";
+    } else if (current && body.abbreviation) {
+      status.textContent = current + " (" + body.abbreviation + ")";
+    } else {
+      status.textContent = current;
+    }
+  }
+
+  function loadTimezone() {
+    fetch("/admin/timezone.php", { headers: { "Accept": "application/json" } }).then(function (response) {
+      return response.json();
+    }).then(function (body) {
+      if (!body.ok) throw new Error(body.detail || "Time zone request failed");
+      renderTimezone(body);
+      timezoneNote(true, "");
+    }).catch(function (err) { timezoneNote(false, err.message); });
+  }
+
+  function systemNameNote(ok, text) {
+    var error = $("system-name-error");
+    if (!error) return;
+    error.hidden = ok || !text;
+    error.textContent = ok ? "" : text;
+  }
+
+  function loadSystemName() {
+    fetch("/admin/system-name.php", { headers: { "Accept": "application/json" } }).then(function (response) {
+      return response.json();
+    }).then(function (body) {
+      if (!body.ok) throw new Error(body.detail || "System name request failed");
+      var input = $("system-name");
+      var status = $("system-name-status");
+      if (input) input.value = body.name || "NexEncoder";
+      if (status) status.textContent = body.name || "NexEncoder";
+      systemNameNote(true, "");
+    }).catch(function (err) { systemNameNote(false, err.message); });
+  }
+
+  var systemNameForm = $("system-name-form");
+  if (systemNameForm) {
+    systemNameForm.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var input = $("system-name");
+      var button = $("system-name-save");
+      if (button) button.disabled = true;
+      fetch("/admin/system-name.php", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Requested-With": "NexEncoder" },
+        body: JSON.stringify({ name: input.value })
+      }).then(function (response) {
+        return response.json().then(function (body) {
+          if (!response.ok || !body.ok) throw new Error(body.detail || "System name was not saved");
+          return body;
+        });
+      }).then(function (body) {
+        if (input) input.value = body.name || "";
+        var status = $("system-name-status");
+        if (status) status.textContent = body.name || "";
+        systemNameNote(true, "");
+      }).catch(function (err) {
+        systemNameNote(false, err.message);
+      }).then(function () {
+        if (button) button.disabled = false;
+      });
+    });
+    loadSystemName();
+  }
+
+  var timezoneForm = $("timezone-form");
+  if (timezoneForm) {
+    timezoneForm.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var select = $("timezone");
+      var button = $("timezone-save");
+      if (button) button.disabled = true;
+      fetch("/admin/timezone.php", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Requested-With": "NexEncoder" },
+        body: JSON.stringify({ timezone: select.value })
+      }).then(function (response) {
+        return response.json().then(function (body) {
+          if (!response.ok || !body.ok) throw new Error(body.detail || "Time zone was not saved");
+          return body;
+        });
+      }).then(function (body) {
+        renderTimezone(body);
+        timezoneNote(true, "");
+      }).catch(function (err) {
+        timezoneNote(false, err.message);
+      }).then(function () {
+        if (button) button.disabled = false;
+      });
+    });
+    loadTimezone();
+  }
 })();

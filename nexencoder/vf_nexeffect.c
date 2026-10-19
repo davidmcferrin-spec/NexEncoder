@@ -16,6 +16,11 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
+#ifndef _WIN32
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #include "libavutil/avstring.h"
 #include "libavutil/avutil.h"
@@ -48,11 +53,14 @@ typedef struct NexEffectContext {
     int bars;
     char waiting[16];
     char ident[128];
+    char system_name[24];
     char loop_path[768];
     char live_path[768];
 
     int width;
     int height;
+    int rate_num;
+    int rate_den;
     int booted;
     int restored;
     int seq;
@@ -85,6 +93,8 @@ typedef struct NexEffectContext {
 } NexEffectContext;
 
 static const char nexencoder_effect_stack_marker[] = "nexencoder effect stack";
+static const char nexencoder_bars_clock_marker[] = "nexencoder bars clock";
+static const char nexencoder_bars_name_marker[] = "nexencoder bars name";
 
 static void identity_corners(double dst[8], int w, int h)
 {
@@ -693,19 +703,14 @@ static void put_px(uint8_t *dst, int w, int h, int x, int y, const uint8_t rgba[
     dst[at + 3] = rgba[3];
 }
 
-static void draw_text(uint8_t *dst, int w, int h, const char *text, int origin_y)
+static void draw_glyphs(uint8_t *dst, int w, int h, const char *text,
+                        int origin_x, int origin_y, int scale, const uint8_t rgba[4])
 {
-    static const uint8_t white[4] = {255, 255, 255, 255};
-    int scale = w >= 1600 ? 6 : 4;
     int count = text ? (int)strlen(text) : 0;
     int glyph_w = 6 * scale;
-    int total, origin_x, i, row, col, sy, sx;
-    if (!count)
+    int i, row, col, sy, sx;
+    if (!count || scale < 1)
         return;
-    total = count * glyph_w;
-    origin_x = (w - total) / 2;
-    if (origin_y < 0)
-        origin_y = h - 10 * scale;
     for (i = 0; i < count; i++) {
         int ch = text[i];
         const uint8_t *rows;
@@ -721,10 +726,285 @@ static void draw_text(uint8_t *dst, int w, int h, const char *text, int origin_y
                 for (sy = 0; sy < scale; sy++)
                     for (sx = 0; sx < scale; sx++)
                         put_px(dst, w, h, origin_x + i * glyph_w + col * scale + sx,
-                               origin_y + row * scale + sy, white);
+                               origin_y + row * scale + sy, rgba);
             }
         }
     }
+}
+
+static void draw_text(uint8_t *dst, int w, int h, const char *text, int origin_y)
+{
+    static const uint8_t white[4] = {255, 255, 255, 255};
+    int scale = w >= 1600 ? 6 : 4;
+    int count = text ? (int)strlen(text) : 0;
+    int total, origin_x;
+    if (!count)
+        return;
+    total = count * 6 * scale;
+    origin_x = (w - total) / 2;
+    if (origin_y < 0)
+        origin_y = h - 10 * scale;
+    draw_glyphs(dst, w, h, text, origin_x, origin_y, scale, white);
+}
+
+static void fill_rect(uint8_t *dst, int w, int h, int x0, int y0, int x1, int y1,
+                      const uint8_t rgba[4])
+{
+    int x, y;
+    if (x0 < 0)
+        x0 = 0;
+    if (y0 < 0)
+        y0 = 0;
+    if (x1 > w)
+        x1 = w;
+    if (y1 > h)
+        y1 = h;
+    for (y = y0; y < y1; y++) {
+        size_t at = ((size_t)y * (size_t)w + (size_t)x0) * 4;
+        for (x = x0; x < x1; x++) {
+            dst[at] = rgba[0];
+            dst[at + 1] = rgba[1];
+            dst[at + 2] = rgba[2];
+            dst[at + 3] = rgba[3];
+            at += 4;
+        }
+    }
+}
+
+/* glibc caches the zone. A Services save replaces /etc/localtime, so the
+ * burned-in abbreviation follows that file without a channel restart. */
+static void refresh_tz(void)
+{
+#ifndef _WIN32
+    static int64_t last_check;
+    static time_t seen_mtime;
+    static char seen_target[256];
+    char target[256];
+    struct stat st;
+    int64_t now = av_gettime_relative();
+    ssize_t n;
+    if (last_check && now - last_check < 1000000)
+        return;
+    last_check = now;
+    n = readlink("/etc/localtime", target, sizeof target - 1);
+    if (n >= 0) {
+        target[n] = 0;
+        if (lstat("/etc/localtime", &st) != 0)
+            return;
+        if (st.st_mtime == seen_mtime && !strcmp(target, seen_target))
+            return;
+        seen_mtime = st.st_mtime;
+        snprintf(seen_target, sizeof seen_target, "%s", target);
+        tzset();
+        return;
+    }
+    if (stat("/etc/localtime", &st) != 0 || st.st_mtime == seen_mtime)
+        return;
+    seen_mtime = st.st_mtime;
+    tzset();
+#else
+    (void)0;
+#endif
+}
+
+/* HH:MM:SS.ff and the zone abbreviation. ff is the frame inside this second
+ * at the picture rate (00-29 at 29.97, 00-59 at 59.94). */
+static void clock_text(char *dst, size_t size, int rate_num, int rate_den)
+{
+    struct timespec ts;
+    struct tm local;
+    char raw[16];
+    char zone[8];
+    time_t sec;
+    int frame, limit, i, n;
+    if (rate_num <= 0 || rate_den <= 0) {
+        rate_num = 30;
+        rate_den = 1;
+    }
+#ifdef _WIN32
+    ts.tv_sec = time(NULL);
+    ts.tv_nsec = 0;
+    sec = (time_t)ts.tv_sec;
+    localtime_s(&local, &sec);
+#else
+    clock_gettime(CLOCK_REALTIME, &ts);
+    sec = (time_t)ts.tv_sec;
+    localtime_r(&sec, &local);
+#endif
+    if (!strftime(raw, sizeof raw, "%Z", &local))
+        raw[0] = 0;
+    n = 0;
+    for (i = 0; raw[i] && n < 6; i++) {
+        char ch = raw[i];
+        if (ch >= 'a' && ch <= 'z')
+            ch -= 32;
+        if ((ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9'))
+            zone[n++] = ch;
+    }
+    zone[n] = 0;
+    if (!n)
+        snprintf(zone, sizeof zone, "UTC");
+    limit = (rate_num + rate_den - 1) / rate_den;
+    if (limit < 1)
+        limit = 1;
+    frame = (int)(((int64_t)ts.tv_nsec * rate_num) / (1000000000LL * rate_den));
+    if (frame < 0)
+        frame = 0;
+    if (frame >= limit)
+        frame = limit - 1;
+    if (frame > 99)
+        frame = 99;
+    snprintf(dst, size, "%02d:%02d:%02d.%02d %s",
+             local.tm_hour, local.tm_min, local.tm_sec, frame, zone);
+}
+
+static int plate_width(int count, int scale)
+{
+    int border = scale / 2;
+    int pad = scale * 2;
+    if (border < 4)
+        border = 4;
+    if (count < 1)
+        count = 1;
+    return count * 6 * scale + (pad + border) * 2;
+}
+
+/* One size for the name and the clock, shrunk until both plates fit. */
+static int plates_scale(int w, int h, int left_count, int right_count)
+{
+    int scale = h / 70;
+    int margin;
+    if (scale < 6)
+        scale = 6;
+    if (scale > 16)
+        scale = 16;
+    while (scale > 6) {
+        margin = h / 36;
+        if (margin < 12)
+            margin = 12;
+        if (margin + plate_width(left_count, scale) + margin
+            + plate_width(right_count, scale) + margin <= w)
+            break;
+        scale--;
+    }
+    return scale;
+}
+
+static void draw_plate(uint8_t *dst, int w, int h, const char *text, int scale, int x, int y)
+{
+    static const uint8_t white[4] = {255, 255, 255, 255};
+    static const uint8_t black[4] = {0, 0, 0, 255};
+    int count = text ? (int)strlen(text) : 0;
+    int border = scale / 2;
+    int pad = scale * 2;
+    int text_w, text_h, inner_w, inner_h, box_w, box_h;
+    if (!count)
+        return;
+    if (border < 4)
+        border = 4;
+    text_w = count * 6 * scale;
+    text_h = 7 * scale;
+    inner_w = text_w + pad * 2;
+    inner_h = text_h + pad * 2;
+    box_w = inner_w + border * 2;
+    box_h = inner_h + border * 2;
+    fill_rect(dst, w, h, x, y, x + box_w, y + box_h, black);
+    fill_rect(dst, w, h, x + border, y + border,
+              x + border + inner_w, y + border + inner_h, white);
+    draw_glyphs(dst, w, h, text, x + border + pad, y + border + pad, scale, black);
+}
+
+static void name_path_from_hold(char *dst, size_t size, const char *hold)
+{
+    const char *slash;
+    size_t dir;
+    if (!hold || !hold[0] || size < 8) {
+        if (size)
+            dst[0] = 0;
+        return;
+    }
+    snprintf(dst, size, "%s", hold);
+    slash = strrchr(dst, '/');
+#ifdef _WIN32
+    {
+        const char *back = strrchr(dst, '\\');
+        if (!slash || (back && back > slash))
+            slash = back;
+    }
+#endif
+    if (!slash) {
+        dst[0] = 0;
+        return;
+    }
+    dir = (size_t)(slash - dst);
+    if (dir + 6 >= size) {
+        dst[0] = 0;
+        return;
+    }
+    memcpy(dst + dir + 1, "name", 5);
+}
+
+/* The state directory holds one name for both channels. Missing means NexEncoder. */
+static void load_system_name(NexEffectContext *s)
+{
+    static int64_t last;
+    char path[1024];
+    char raw[64];
+    char cleaned[24];
+    FILE *file;
+    int i, n;
+    int64_t now = av_gettime_relative();
+    if (s->system_name[0] && last && now - last < 1000000)
+        return;
+    last = now;
+    snprintf(s->system_name, sizeof s->system_name, "NexEncoder");
+    name_path_from_hold(path, sizeof path, s->hold_path);
+    if (!path[0])
+        return;
+    file = fopen(path, "r");
+    if (!file)
+        return;
+    raw[0] = 0;
+    if (!fgets(raw, sizeof raw, file)) {
+        fclose(file);
+        return;
+    }
+    fclose(file);
+    n = 0;
+    for (i = 0; raw[i] && n < 16; i++) {
+        char ch = raw[i];
+        int ok = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')
+            || (ch >= '0' && ch <= '9') || ch == ' ' || ch == '.' || ch == ':';
+        if (!ok)
+            continue;
+        if (ch == ' ' && (n == 0 || cleaned[n - 1] == ' '))
+            continue;
+        cleaned[n++] = ch;
+    }
+    while (n > 0 && cleaned[n - 1] == ' ')
+        n--;
+    cleaned[n] = 0;
+    if (n)
+        snprintf(s->system_name, sizeof s->system_name, "%s", cleaned);
+}
+
+static void draw_bars_plates(uint8_t *dst, int w, int h, NexEffectContext *s)
+{
+    char clock[40];
+    int scale, margin, clock_w, x;
+    refresh_tz();
+    load_system_name(s);
+    clock_text(clock, sizeof clock, s->rate_num, s->rate_den);
+    scale = plates_scale(w, h, (int)strlen(s->system_name), (int)strlen(clock));
+    margin = h / 36;
+    if (margin < 12)
+        margin = 12;
+    draw_plate(dst, w, h, s->system_name, scale, margin, margin);
+    clock_w = plate_width((int)strlen(clock), scale);
+    x = w - margin - clock_w;
+    if (x < margin)
+        x = margin;
+    draw_plate(dst, w, h, clock, scale, x, margin);
 }
 
 static void draw_bars(uint8_t *dst, int w, int h)
@@ -903,6 +1183,10 @@ static void composite(uint8_t *dst, const uint8_t *video, int w, int h,
         if (s->ident[0] && strcmp(s->ident, "-"))
             draw_text(dst, w, h, s->ident, h - h / 10);
     }
+    /* The clock is a plate on the finished picture. Waiting bars stay
+     * cached; this paint is the only part that changes every frame. */
+    if (s->bars || (!covered && !strcmp(s->waiting, "bars")))
+        draw_bars_plates(dst, w, h, s);
 }
 
 static void force_opaque(uint8_t *rgba, int w, int h)
@@ -946,6 +1230,12 @@ static int config_input(AVFilterLink *inlink)
     s->self = ctx;
     s->width = inlink->w;
     s->height = inlink->h;
+    s->rate_num = inlink->frame_rate.num;
+    s->rate_den = inlink->frame_rate.den;
+    if (s->rate_num <= 0 || s->rate_den <= 0) {
+        s->rate_num = 30;
+        s->rate_den = 1;
+    }
     if ((s->height & 1) && s->interlaced)
         s->interlaced = 0;
     bytes = (size_t)s->width * s->height * 4;
@@ -977,6 +1267,8 @@ static int config_input(AVFilterLink *inlink)
     memcpy(s->start, s->current, sizeof s->current);
     memcpy(s->target, s->current, sizeof s->current);
     av_log(ctx, AV_LOG_INFO, "%s\n", nexencoder_effect_stack_marker);
+    av_log(ctx, AV_LOG_INFO, "%s\n", nexencoder_bars_clock_marker);
+    av_log(ctx, AV_LOG_INFO, "%s\n", nexencoder_bars_name_marker);
     if (s->state_path && strlen(s->state_path) + 5 < sizeof s->run_path) {
         snprintf(s->run_path, sizeof s->run_path, "%s.run", s->state_path);
         snprintf(s->run_tmp, sizeof s->run_tmp, "%s.run.tmp", s->state_path);

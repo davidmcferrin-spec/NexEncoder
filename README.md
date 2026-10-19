@@ -19,7 +19,7 @@ Ubuntu 24.04 LTS. Packages come from APT (no pip, no venv): Python, GStreamer,
 Prometheus, and node_exporter. `setup.sh` downloads FFmpeg 9.0.2 and builds it into
 `/usr/local` with DeckLink (`--enable-nonfree`), OpenSSL (`--enable-version3`), libx264,
 and libopus. The build patches the DeckLink demuxer so caption CDPs and SCTE-104 ride a
-localhost UDP feed to the channel supervisor, which inserts SCTE-35. `setup.sh` installs
+localhost UDP feed to the channel supervisor, which inserts SCTE-35. A host that is still on UTC is set to `America/New_York`; a time zone chosen on Services is left in place. `setup.sh` installs
 the DeckLink SDK from `Blackmagic_DeckLink_SDK_*.zip` in `/home/nexstar` (or the home
 directory of the user who ran sudo) into `/opt/decklink-sdk`, and installs the
 `desktopvideo` package from `Blackmagic_Desktop_Video_Linux_*.tar.gz` in that same
@@ -68,7 +68,8 @@ older journal lines; those lines stay on disk until Clear All. Clear All, on tha
 rotates and vacuums the host journal and does not download a zip. Services keep running. The
 audit log at `/var/lib/nexencoder/state/audit.log` records each action and its settings. There
 is no login, so a line is a time, an action, and the settings. Clear All does not delete that
-file. The dashboard can restart `nexencoder-channel@A` or `@B` after a save. Input, output,
+file. The bottom of the Services page sets the system name (NexEncoder until one is saved) and the host time zone. The list is the US zones, from
+Eastern through Guam. Bars read that zone. The dashboard can restart `nexencoder-channel@A` or `@B` after a save. Input, output,
 and the program picture for each channel are on that page. `inputs.php`, `outputs.php`, and
 `monitor.php` redirect there.
 
@@ -108,7 +109,11 @@ An output can also be SDI. Channel A plays DeckLink Duo (3) and channel B plays 
 Layer −5 is a waiting picture (a slate, a 10–30 second loop, or color bars) and stays on
 the output when SDI unlocks or the SRT caller drops. The encode keeps running.
 `POST /api/channels/A/bars` with `{"enabled": true}` puts SMPTE bars and an ident
-(host address and input number) on layer +5 without restarting the channel. While bars
+(host address and input number) on layer +5 without restarting the channel. Waiting color bars get the same plates.
+The system name sits at the top left and the clock
+at the top right, each a white box with black
+text. The clock is `HH:MM:SS.ff` plus the zone abbreviation (`EDT`, `CST`, and the rest). The bars font draws capitals, so `NexEncoder` paints as `NEXENCODER`. `ff` is the
+frame inside the current second at the picture rate. While bars
 are the picture, the output audio is a 1 kHz tone. Captions and SCTE are not required
 in that mode, and an SRT input has no VANC.
 
@@ -165,6 +170,7 @@ existing token or `noc.json`.
 | `channel.py` | One-channel supervisor: capture, spliceinject, egress |
 | `status.py` | ffmpeg progress file used for live bitrate and signal |
 | `sideband.py` | Caption and splice notes for the dashboard |
+| `timezone.py` | US host time zones for Services and the bars clock |
 | `crc.py` | CRC-32/MPEG-2 |
 
 ## Target hardware

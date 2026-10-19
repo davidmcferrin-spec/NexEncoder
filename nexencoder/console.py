@@ -28,10 +28,12 @@ from .effects import (
     normalize_channel,
     preset_json,
     read_flag,
+    read_system_name,
     recall_effect,
     still_path,
     upsert_preset,
     write_flag,
+    write_system_name,
 )
 from .livefeed import check_loop_file
 from .errors import ParseError
@@ -56,6 +58,7 @@ from .services import (
     normalize_unit,
 )
 from .support import build_bundle, clear_journal
+from .timezone import TimezoneError, TimezoneUnavailable, current_timezone, set_timezone
 from .vendors import (
     VendorError,
     list_vendors,
@@ -97,6 +100,7 @@ class Console:
         hls_root: Path | None = None,
         proc_root: Path | None = None,
         names: NameLookup | None = None,
+        timezone_runner=None,
     ) -> None:
         repo = Path(__file__).resolve().parents[1]
         self.prometheus_url = prometheus_url
@@ -120,6 +124,7 @@ class Console:
         self.hls_root = hls_root or Path("/var/lib/nexencoder/hls")
         self.proc_root = proc_root or Path("/proc")
         self.names = names or NameLookup()
+        self.timezone_runner = timezone_runner
 
     def output_status(self) -> dict:
         return output_health(
@@ -202,6 +207,10 @@ def make_handler(console: Console):
                     self._tokens(None)
                 elif path == "/api/services":
                     self._json(200, list_units(console.unit_runner))
+                elif path == "/api/timezone":
+                    self._json(200, current_timezone(console.timezone_runner))
+                elif path == "/api/system-name":
+                    self._json(200, {"ok": True, "name": read_system_name(console.state_dir)})
                 elif path == "/api/vendors":
                     self._json(200, list_vendors(console.state_dir, run=console.vendor_runner))
                 elif path == "/api/support":
@@ -259,6 +268,10 @@ def make_handler(console: Console):
                     self._tokens(body)
                 elif parts == ["api", "journal", "clear"]:
                     self._journal_clear()
+                elif parts == ["api", "timezone"]:
+                    self._timezone(body)
+                elif parts == ["api", "system-name"]:
+                    self._system_name(body)
                 elif parts == ["api", "vendors", "save"]:
                     self._vendor_save(body)
                 elif parts == ["api", "vendors", "start"]:
@@ -275,9 +288,9 @@ def make_handler(console: Console):
                     self._caption_source(unquote(parts[2]), body)
                 else:
                     self._json(404, {"ok": False, "detail": "Unknown action"})
-            except (ServiceError, VendorError) as exc:
+            except (ServiceError, VendorError, TimezoneError) as exc:
                 self._json(400, {"ok": False, "detail": str(exc)})
-            except ServiceUnavailable as exc:
+            except (ServiceUnavailable, TimezoneUnavailable) as exc:
                 self._json(503, {"ok": False, "detail": str(exc)})
             except (ParseError, ValueError, json.JSONDecodeError) as exc:
                 self._json(400, {"ok": False, "detail": str(exc)})
@@ -529,6 +542,32 @@ def make_handler(console: Console):
                 raise
             try_record(console.state_dir, f"service.{action}", {"unit": result["unit"], "ok": True})
             self._json(200, result)
+
+        def _timezone(self, body: bytes) -> None:
+            raw = json.loads(body.decode("utf-8") or "{}")
+            if not isinstance(raw, dict):
+                raise ValueError("timezone must be an object")
+            name = str(raw.get("timezone") or "")
+            try:
+                result = set_timezone(name, console.timezone_runner)
+            except (TimezoneError, TimezoneUnavailable) as exc:
+                try_record(console.state_dir, "timezone.set", {"timezone": name, "ok": False, "detail": str(exc)})
+                raise
+            try_record(console.state_dir, "timezone.set", {"timezone": result["timezone"], "ok": True})
+            self._json(200, result)
+
+        def _system_name(self, body: bytes) -> None:
+            raw = json.loads(body.decode("utf-8") or "{}")
+            if not isinstance(raw, dict):
+                raise ValueError("system name must be an object")
+            name = str(raw.get("name") or "")
+            try:
+                saved = write_system_name(console.state_dir, name)
+            except ValueError as exc:
+                try_record(console.state_dir, "system.name", {"name": name, "ok": False, "detail": str(exc)})
+                raise
+            try_record(console.state_dir, "system.name", {"name": saved, "ok": True})
+            self._json(200, {"ok": True, "name": saved})
 
         def _clear_unit_journal(self, unit: str) -> None:
             name = normalize_unit(unit)

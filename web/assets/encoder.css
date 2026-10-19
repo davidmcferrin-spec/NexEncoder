@@ -536,6 +536,9 @@ button.unit-row.is-selected,
 }
 .token-form input { width: auto; min-width: 12rem; margin: 0; }
 #token-panel { margin: 0 0 1rem; }
+#timezone-panel { margin: 1rem 0 0; }
+#timezone-panel select,
+#timezone-panel input { min-width: 16rem; margin: 0; font: inherit; }
 .channel-dialog h2 { margin: 0; }
 .channel-dialog-head {
   display: flex;

@@ -47,7 +47,7 @@ header('X-Content-Type-Options: nosniff');
     <div class="page-head">
       <div>
         <h1>Services</h1>
-        <p class="lead">Start, stop, restart, enable, and disable the encoder units. The journal follows the selected unit. Clear log hides this unit's older lines. Clear All deletes the host journal for every service and does not download a zip. The audit log is kept and is included in the support zip.</p>
+        <p class="lead">Start, stop, restart, enable, and disable the encoder units. The journal follows the selected unit. Clear log hides this unit's older lines. Clear All deletes the host journal for every service and does not download a zip. The audit log is kept and is included in the support zip. The bottom of this page sets the system name and the host time zone shown on the bars.</p>
       </div>
     </div>
     <div class="support-bundle-bar">
@@ -102,6 +102,24 @@ header('X-Content-Type-Options: nosniff');
         <div class="log-box" id="journal" role="log" aria-live="polite"></div>
       </section>
     </div>
+    <section class="panel" id="timezone-panel">
+      <h2>Host</h2>
+      <p class="muted">The system name is the top-left plate on bars and the ident. The clock at the top right uses the time zone below: hours, minutes, seconds, the frame within that second, then the abbreviation. The bars font draws capitals.</p>
+      <form id="system-name-form" class="token-form">
+        <label for="system-name">System name</label>
+        <input id="system-name" name="name" maxlength="16" autocomplete="off" spellcheck="false" required>
+        <button type="submit" id="system-name-save">Save</button>
+        <span id="system-name-status" class="muted"></span>
+      </form>
+      <p class="error" id="system-name-error" role="alert" hidden></p>
+      <form id="timezone-form" class="token-form">
+        <label for="timezone">Time zone</label>
+        <select id="timezone" name="timezone"></select>
+        <button type="submit" id="timezone-save">Save</button>
+        <span id="timezone-status" class="muted"></span>
+      </form>
+      <p class="error" id="timezone-error" role="alert" hidden></p>
+    </section>
   </main>
   <footer class="shell-footer">
     <span>NexEncoder</span>

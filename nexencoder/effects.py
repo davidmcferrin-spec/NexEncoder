@@ -680,6 +680,44 @@ def write_text_atomic(path: Path, body: str) -> None:
     tmp.replace(path)
 
 
+DEFAULT_SYSTEM_NAME = "NexEncoder"
+_SYSTEM_NAME_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .: ")
+
+
+def system_name_path(state_dir: Path) -> Path:
+    return state_dir / "name"
+
+
+def normalize_system_name(name: str) -> str:
+    """Letters, digits, spaces, periods, and colons. At most 16 characters."""
+    raw = " ".join((name or "").split())
+    if not raw:
+        raise ValueError("system name is required")
+    if len(raw) > 16:
+        raise ValueError("system name must be 16 characters or fewer")
+    if any(ch not in _SYSTEM_NAME_CHARS for ch in raw):
+        raise ValueError("use letters, digits, spaces, periods, or colons")
+    return raw
+
+
+def read_system_name(state_dir: Path) -> str:
+    """The host name burned into the bars. A missing file is NexEncoder."""
+    try:
+        text = system_name_path(state_dir).read_text(encoding="utf-8")
+    except OSError:
+        return DEFAULT_SYSTEM_NAME
+    try:
+        return normalize_system_name(text)
+    except ValueError:
+        return DEFAULT_SYSTEM_NAME
+
+
+def write_system_name(state_dir: Path, name: str) -> str:
+    cleaned = normalize_system_name(name)
+    write_text_atomic(system_name_path(state_dir), cleaned + "\n")
+    return cleaned
+
+
 def write_flag(path: Path, enabled: bool) -> None:
     write_text_atomic(path, "1\n" if enabled else "0\n")
 

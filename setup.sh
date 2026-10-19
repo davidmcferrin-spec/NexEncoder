@@ -20,6 +20,7 @@
 # not downloaded. decklink-configure and decklink-status are built from those
 # headers. A boot oneshot sets Duo 2 / 8K Pro connectors to half-duplex inputs
 # before the channels open the card. Rebuild FFmpeg with NEXENCODER_FORCE_FFMPEG_BUILD=1.
+# A host still on UTC is set to America/New_York. A zone chosen later is left alone.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -256,6 +257,8 @@ ffmpeg_build_ok() {
     && grep -a -q 'nexencoder VANC forwarder' /usr/local/lib/libavdevice.so \
     && grep -a -q 'nexencoder SDI ancillary' /usr/local/lib/libavdevice.so \
     && grep -a -q 'nexencoder effect stack' /usr/local/lib/libavfilter.so \
+    && grep -a -q 'nexencoder bars clock' /usr/local/lib/libavfilter.so \
+    && grep -a -q 'nexencoder bars name' /usr/local/lib/libavfilter.so \
     && grep -a -q 'nexencoder caption slot' /usr/local/lib/libavfilter.so
 }
 
@@ -377,7 +380,26 @@ install_noc_agent() {
   log "Create, revoke, and delete tokens on the Services page. The agent re-reads the token file, so that does not need a restart."
 }
 
+set_default_timezone() {
+  local current
+  if ! command -v timedatectl >/dev/null 2>&1; then
+    log "WARNING: timedatectl is missing; timezone left unchanged"
+    return
+  fi
+  current="$($SUDO timedatectl show -p Timezone --value 2>/dev/null || true)"
+  case "$current" in
+    ""|UTC|Etc/UTC)
+      log "setting timezone to America/New_York"
+      $SUDO timedatectl set-timezone America/New_York
+      ;;
+    *)
+      log "timezone is already ${current}"
+      ;;
+  esac
+}
+
 if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt-get >/dev/null 2>&1; then
+  set_default_timezone
   prom_missing=()
   for pkg in prometheus prometheus-node-exporter; do
     dpkg -s "$pkg" >/dev/null 2>&1 || prom_missing+=("$pkg")
