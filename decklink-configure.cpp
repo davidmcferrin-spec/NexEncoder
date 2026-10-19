@@ -1,11 +1,11 @@
 // decklink-configure.cpp — set Duo 2 / 8K Pro connector mapping for capture
 // without BlackmagicDesktopVideoSetup.
 //
-// Duo 2 BNCs are bidirectional. Full duplex ("SDI N & N+1") parks half the
-// sub-devices, so connectors 3 and 4 never appear as DeckLink Duo 2 (3)/(4).
-// NexEncoder needs four independent inputs: program A, program B, fill, and
-// key. That is bmdProfileTwoSubDevicesHalfDuplex per profile group (SDK
-// §2.4.11), with the four-sub-device profile as the 8K Pro fallback.
+// Duo 2 BNCs are bidirectional. Full duplex ("SDI N & N+1") pairs connectors,
+// so program B is not its own capture device. NexEncoder needs two independent
+// inputs, program A on connector 1 and program B on connector 2. That is
+// bmdProfileTwoSubDevicesHalfDuplex per profile group (SDK §2.4.11), with the
+// four-sub-device profile as the 8K Pro fallback.
 // SetActive() persists to Desktop Video preferences.
 //
 // Usage:

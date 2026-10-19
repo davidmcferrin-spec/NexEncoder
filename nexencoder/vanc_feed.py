@@ -19,7 +19,7 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from .errors import TranslateError
-from .pipeline import SPLICE_PORT, VANC_PORT
+from .pipeline import SDI_SCTE_PORT, SPLICE_PORT, VANC_PORT
 from .translate import translate_mom
 from .vanc import events_from_vanc, scan_vanc
 
@@ -73,6 +73,7 @@ class VancForwarder:
         send_section: Callable[[bytes, int], None],
         post: Callable[[dict], None] = post_sideband,
         repeat_seconds: float = REPEAT_SECONDS,
+        sdi_send: Callable[[bytes, int], None] | None = None,
     ) -> None:
         if channel_id not in SPLICE_PORT:
             raise ValueError("channel must be A or B")
@@ -80,6 +81,7 @@ class VancForwarder:
         self.splice_port = SPLICE_PORT[channel_id]
         self._send_section = send_section
         self._post = post
+        self._sdi = sdi_send
         self._repeat = repeat_seconds
         self._sent: dict[bytes, float] = {}
         self._caption: tuple[tuple[str, str], ...] = ()
@@ -107,6 +109,11 @@ class VancForwarder:
             self._sent[payload] = now
             return
         self._sent[payload] = now
+        if self._sdi is not None:
+            try:
+                self._sdi(payload, pts)
+            except OSError:
+                log.warning("channel %s could not forward SCTE-104 to SDI", self.channel_id, exc_info=True)
         for mom in found["splices"]:
             try:
                 sections = translate_mom(mom, pts)
@@ -155,7 +162,10 @@ def serve_vanc(
         sock.close()
         return
     sock.settimeout(0.5)
-    forwarder = VancForwarder(channel_id, send_section or _udp_section, post)
+    forwarder = VancForwarder(
+        channel_id, send_section or _udp_section, post,
+        sdi_send=lambda payload, pts: send_sdi_scte(channel_id, payload, pts),
+    )
     log.info("channel %s listening for VANC on 127.0.0.1:%s", channel_id, port)
     try:
         while not stop.is_set():
@@ -169,6 +179,17 @@ def serve_vanc(
                 forwarder.handle(packet, time.monotonic(), splice_ready())
             except Exception:
                 log.warning("VANC datagram failed", exc_info=True)
+    finally:
+        sock.close()
+
+
+def send_sdi_scte(channel_id: str, payload: bytes, pts: int) -> None:
+    """Hand one SCTE-104 message to the SDI playback muxer."""
+    port = SDI_SCTE_PORT[channel_id]
+    packet = pack_vanc_datagram(KIND_SCTE, pts, payload)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.sendto(packet, ("127.0.0.1", port))
     finally:
         sock.close()
 

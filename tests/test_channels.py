@@ -108,6 +108,26 @@ def test_firewall_ports_follow_every_srt_listener():
     assert firewall_udp_ports(several) == [9000, 9001, 9002, 9101, 9300]
 
 
+def test_one_sdi_output_keeps_the_playback_connector():
+    config = normalize_config({
+        "outputs": {
+            "A": [
+                {"mode": "sdi"},
+                {"mode": "sdi"},
+                {"mode": "srt-listener", "port": 9300},
+            ],
+            "B": [{"mode": "sdi", "host": "ignored.example", "url": "https://nope.example"}],
+        },
+    })
+    outputs = config["outputs"]["A"]
+    assert [item["mode"] for item in outputs] == ["sdi", "srt-listener"]
+    assert outputs[0]["device"] == "DeckLink Duo (3)"
+    assert outputs[0]["host"] == "" and outputs[0]["url"] == ""
+    played = config["outputs"]["B"][0]
+    assert played["device"] == "DeckLink Duo (4)"
+    assert played["host"] == "" and played["url"] == ""
+
+
 def test_snapshot_omits_resolution_until_the_input_locks():
     config = normalize_config({})
     idle = render_metrics(snapshot_for(config))

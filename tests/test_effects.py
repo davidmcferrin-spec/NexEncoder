@@ -133,31 +133,29 @@ def test_preset_limits_layers_and_raster():
         "out_frames": 0,
         "layers": [
             {"level": -1, "source": {"type": "html", "url": "/cg/bug.html"}},
-            {"level": 2, "source": {"type": "sdi-key"}},
+            {"level": 2, "source": {"type": "html", "url": "https://cg.example/b"}},
         ],
     }
     effect = normalize_effect(good)
     assert effect["layers"][0]["source"]["url"].startswith("http://127.0.0.1/cg/bug.html")
-    assert effect["layers"][1]["source"] == {"type": "sdi-key"}
-    ndi = normalize_effect({
+    assert effect["layers"][1]["source"] == {"type": "html", "url": "https://cg.example/b"}
+    retired = normalize_effect({
         "format": "1080i59.94",
-        "layers": [{"level": 3, "source": {"type": "ndi", "name": "  GRAPHICS (NDI)  "}}],
+        "layers": [
+            {"level": 3, "source": {"type": "ndi", "name": "GRAPHICS"}},
+            {"level": 1, "source": {"type": "sdi-key"}},
+            {"level": -2, "source": {"type": "html", "url": "https://cg.example/a"}},
+        ],
     })
-    assert ndi["layers"][0]["source"] == {"type": "ndi", "name": "GRAPHICS (NDI)"}
+    assert retired["layers"] == [
+        {"level": -2, "source": {"type": "html", "url": "https://cg.example/a"}},
+    ]
     assert len(effect["layers"]) == 2
     with pytest.raises(ValueError, match="2 CG layers"):
         normalize_effect({
             "format": "1080i59.94",
             "layers": good["layers"] + [
                 {"level": 4, "source": {"type": "html", "url": "https://cg.example/c"}},
-            ],
-        })
-    with pytest.raises(ValueError, match="one SDI"):
-        normalize_effect({
-            "format": "1080i59.94",
-            "layers": [
-                {"level": 1, "source": {"type": "sdi-key"}},
-                {"level": -1, "source": {"type": "sdi-key"}},
             ],
         })
     with pytest.raises(ValueError, match="share a level"):

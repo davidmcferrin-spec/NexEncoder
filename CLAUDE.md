@@ -31,7 +31,7 @@ to SCTE-35) and shown on a low-latency WebRTC proxy preview via MediaMTX.
   PHP and applied by restarting `nexencoder-channel@A` / `@B`. The dashboard can restart that unit. Each saved output shows a transmission dot, and a hostname is resolved on the encoder. Input and output settings open from that page. `inputs.php`, `outputs.php`, and `monitor.php` redirect there. The Services page can copy the visible journal. Its support-bundle bar, separate from the unit list, downloads one redacted zip of every encoder service plus host details such as lsmod and dmesg, for 24, 36, 48, or 72 hours, or the whole journal. The NOC token is not included. Clear log on the selected unit hides older lines in that journal view. Clear All on that bar rotates and vacuums the host journal without downloading a zip. Services keep running. The Vendors page saves, pulls, starts, and stops one sidecar image per name. The unit is `nexencoder-vendor@<name>` on the host network. Starting it selects vendor captions for that channel; stopping the last sidecar for the channel returns captions to VANC. The contract for the image is `docs/VENDOR.md`. Operator actions are appended to the state directory audit log, that file is included in the support zip, and Clear All does not erase it. Effect recall, normalize,
   and bars-with-ident do not restart the channel. Input A is DeckLink Duo (1) or SRT
   listener port 9001; input B is DeckLink Duo (2) or port 9002. Output B's first listener is 9101.
-  The Output dialog can add destinations, four per input, each SRT caller or listener or HLS push or pull.
+  The Output dialog can add destinations, four per input, each SRT caller or listener, HLS push or pull, or SDI. SDI plays DeckLink Duo (3) for A and Duo (4) for B, one per channel. 608/708 and SCTE-104 are written into the VANC. The playback process restarts on its own.
   Bitrate is the encode, shared by those destinations. The first HLS pull stays at `hls/<channel>/`.
   Auto, in each input's settings, reads the locked SDI mode from `decklink-status`, or the SRT caller's stream banner, and saves that raster.
   Layer −5 is the waiting picture. Layer +5 is bars plus an ident. A tone replaces audio
@@ -39,11 +39,10 @@ to SCTE-35) and shown on a low-latency WebRTC proxy preview via MediaMTX.
   Up to two CG layers each take a level from −4 to +4; 0 is the video. HTML is painted live by
   WPE or Chromium with alpha kept. Ubuntu 24.04 does not package WPE, so `setup.sh` installs Google Chrome for that path.
   Chromium runs under nice 10, gets 30 s to show a page, and keeps one profile per layer in `/var/lib/nexencoder/chrome/<channel>-<slot>`.
-  `python3 -m nexencoder.cgfeed --probe URL` runs that renderer once outside the channel and reports the first frame. An NDI source can occupy a layer when ndisrc is installed.
-  One SDI fill/key pair, DeckLink inputs 3 and 4, is shared. `setup.sh` builds
-  `decklink-configure` and `nexencoder-decklink-configure` sets the card to
+  `python3 -m nexencoder.cgfeed --probe URL` runs that renderer once outside the channel and reports the first frame.
+  `setup.sh` builds `decklink-configure` and `nexencoder-decklink-configure` sets the card to
   half-duplex inputs before those units open it, so a factory full-duplex Duo 2
-  exposes all four connectors. 608/708 stay A/53 side data on the
+  exposes connectors 1 and 2 as separate capture devices. 608/708 stay A/53 side data on the
   primary frame. SCTE-104 still leaves the demuxer as UDP and returns as SCTE-35. SRT inputs have no VANC.
 - Packages: APT only (Ubuntu 24.04 LTS), plus a pinned FFmpeg 9.0.2 built with DeckLink,
   pinned TSDuck 3.45-4798, and the pinned MediaMTX binary. No pip, no venv. TSDuck is

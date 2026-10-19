@@ -33,7 +33,7 @@ def test_basic_scenario_decodes_in_tsduck(tmp_path):
     xml = decode(tmp_path, "basic")
     assert xml.count("<splice_insert") == 2
     assert re.search(r'splice_event_id="(?:100|0x0*64)"', xml, re.I)
-    assert re.search(r'duration="(?:2700000|0x0*2932e0)"', xml, re.I)
+    assert re.search(r'duration="(?:2,?700,?000|0x0*2932e0)"', xml, re.I)
 
 
 def test_cancel_scenario_decodes_in_tsduck(tmp_path):

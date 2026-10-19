@@ -878,6 +878,20 @@ def test_output_health_colors_transmission_and_dns(tmp_path):
     assert "203.0.113.10" not in calls and "203.0.113.20" not in calls
 
 
+def test_sdi_transmission_is_playing_while_the_encode_is_up():
+    from nexencoder.noc import connection, destination, transmission, transport_mode
+
+    connected, evidence = connection("sdi", True, False, None, None)
+    assert connected is True and evidence == "sdi-play"
+    assert transmission("sdi", evidence, None, "none") == ("orange", "playing")
+    down, reason = connection("sdi", False, False, None, None)
+    assert down is False and reason == "pipeline-down"
+    assert transmission("sdi", reason, None, "none") == ("red", "down")
+    spec = {"id": "1", "mode": "sdi", "device": "DeckLink Duo (3)", "host": "", "port": 9100, "url": ""}
+    assert destination("A", spec, Path("/tmp")) == "DeckLink Duo (3)"
+    assert transport_mode("sdi") == ("sdi", "playback")
+
+
 def test_caller_url_keeps_path_and_query_for_dns_and_status():
     from nexencoder.noc import destination, output_hostname
     spec = {

@@ -185,6 +185,20 @@ def test_hls_pull_copies_and_push_puts():
         egress_argv("A", "hls-push", "", 0, "", "/tmp")
 
 
+def test_sdi_playback_reads_the_program_feed():
+    argv = egress_argv("A", "sdi", "", 0, "", "/tmp/unused")
+    assert argv[argv.index("-f") + 1] == "mpegts"
+    assert argv[argv.index("-f", argv.index("-f") + 1) + 1] == "decklink"
+    assert "wrapped_avframe" in argv
+    assert "format=uyvy422" in argv
+    assert "DeckLink Duo (3)" in argv
+    assert any("239.255.1.1:19001" in item for item in argv)
+    assert "libx264" not in argv
+    other = egress_argv("B", "sdi", "ignored.example", 9, "https://nope.example", "/tmp")
+    assert "DeckLink Duo (4)" in other
+    assert "libx264" not in other
+
+
 def test_sections_from_mom_are_scte35():
     mom = s104.build_mom(s104.Mom(0, 0, 1, 0, 0, s104.TIME_NONE, b"", (s104.SpliceNull104(),)))
     sections = sections_from_mom(mom)

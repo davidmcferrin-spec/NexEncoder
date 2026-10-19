@@ -129,3 +129,18 @@ def build_cdp(frame_rate_code: int, sequence: int, triplets: list[CcTriplet]) ->
     total = 3 + len(body) + 1
     partial = CDP_ID + bytes([total]) + body
     return partial + bytes([(-sum(partial)) & 0xFF])
+
+
+def cdp_from_a53(data: bytes, frame_rate_code: int, sequence: int) -> bytes:
+    """Wrap A/53 cc_data triplets in a CDP. Each triplet is marker, byte, byte."""
+    if frame_rate_code not in FRAME_RATES:
+        raise ValueError("CDP frame rate code must be 1 to 8")
+    if len(data) % 3:
+        raise ValueError("A/53 cc_data length must be a multiple of 3")
+    if len(data) > 31 * 3:
+        raise ValueError("a CDP carries at most 31 cc_data triplets")
+    triplets = [
+        CcTriplet(bool(data[i] & 0x04), data[i] & 0x03, data[i + 1], data[i + 2])
+        for i in range(0, len(data), 3)
+    ]
+    return build_cdp(frame_rate_code, sequence, triplets)

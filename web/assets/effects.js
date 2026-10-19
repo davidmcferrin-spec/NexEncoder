@@ -44,9 +44,7 @@
       rows.push({
         enabled: i === 0,
         level: defaults[i],
-        type: "html",
-        url: i === 0 ? "/cg/bug.html" : "",
-        name: ""
+        url: i === 0 ? "/cg/bug.html" : ""
       });
     }
     return rows;
@@ -82,12 +80,7 @@
     var used = [];
     layers.forEach(function (layer) {
       if (!layer.enabled) return;
-      var source = layer.type === "sdi-key"
-        ? { type: "sdi-key" }
-        : layer.type === "ndi"
-          ? { type: "ndi", name: layer.name }
-          : { type: "html", url: layer.url };
-      used.push({ level: Number(layer.level), source: source });
+      used.push({ level: Number(layer.level), source: { type: "html", url: layer.url } });
     });
     return {
       format: formatName,
@@ -212,7 +205,7 @@
     layers.forEach(function (layer) {
       if (!layer.enabled) return;
       var node;
-      if (layer.type === "html" && layer.url) {
+      if (layer.url) {
         node = document.createElement("iframe");
         node.src = previewUrl(layer.url);
         node.title = "CG layer " + levelLabel(layer.level);
@@ -221,14 +214,6 @@
         node.setAttribute("height", String(size[1]));
         node.style.colorScheme = "normal";
         node.style.backgroundColor = "transparent";
-      } else if (layer.type === "sdi-key") {
-        node = document.createElement("div");
-        node.className = "sdi-plate";
-        node.textContent = "SDI fill/key \u00b7 DeckLink Duo (3) / (4)";
-      } else if (layer.type === "ndi" && layer.name) {
-        node = document.createElement("div");
-        node.className = "sdi-plate";
-        node.textContent = "NDI \u00b7 " + layer.name;
       }
       if (!node) return;
       sizeToRaster(node);
@@ -330,21 +315,7 @@
         String(layer.level),
         function (value) { layer.level = Number(value); paintLayers(); }
       )));
-      card.appendChild(field("Source", select(
-        [["html", "HTML5 URL"], ["ndi", "NDI"], ["sdi-key", "SDI fill/key"]],
-        layer.type,
-        function (value) { layer.type = value; buildLayerCards(); paintLayers(); }
-      )));
-      if (layer.type === "html") {
-        card.appendChild(field("URL", text(layer.url, function (value) { layer.url = value; paintLayers(); }, "change")));
-      } else if (layer.type === "ndi") {
-        card.appendChild(field("NDI source", text(layer.name, function (value) { layer.name = value; paintLayers(); }, "change")));
-      } else {
-        var fixed = document.createElement("p");
-        fixed.className = "muted";
-        fixed.textContent = "Fill DeckLink Duo (3), key DeckLink Duo (4).";
-        card.appendChild(fixed);
-      }
+      card.appendChild(field("URL", text(layer.url, function (value) { layer.url = value; paintLayers(); }, "change")));
       root.appendChild(card);
     });
   }
@@ -407,14 +378,15 @@
     document.getElementById("out-frames").value = String(preset.out_frames || 0);
     document.getElementById("preset-name").value = preset.name || "";
     layers = emptyLayers();
-    (preset.layers || []).forEach(function (layer, index) {
-      if (index >= LAYER_SLOTS) return;
-      var row = layers[index];
+    var slot = 0;
+    (preset.layers || []).forEach(function (layer) {
+      if (slot >= LAYER_SLOTS) return;
+      if (!layer.source || layer.source.type !== "html") return;
+      var row = layers[slot];
+      slot += 1;
       row.enabled = true;
       row.level = layer.level;
-      row.type = layer.source.type;
-      if (row.type === "html") row.url = layer.source.url;
-      if (row.type === "ndi") row.name = layer.source.name;
+      row.url = layer.source.url;
     });
     document.getElementById("squeeze").width = size[0];
     document.getElementById("squeeze").height = size[1];
@@ -570,7 +542,7 @@
     fetch("/admin/preset.php").then(function (response) { return response.json(); }).then(function (body) {
       renderPresets(body.presets || []);
       if (body.html_renderer === "none") {
-        note(false, "No HTML renderer on this host. Squeeze and SDI key still recall; HTML layers stay transparent until WPE or Chromium is installed.");
+        note(false, "No HTML renderer on this host. Squeeze still recalls; HTML layers stay transparent until WPE or Chromium is installed.");
       }
     }).catch(function () {});
     document.getElementById("effect-channel").addEventListener("change", function (event) {

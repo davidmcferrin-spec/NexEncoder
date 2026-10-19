@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .audit import clear_journal_cutoffs, journal_since, mark_journal_cleared, try_record
 from .channels import load_config, save_config, snapshot_for
-from .cgfeed import detect_html_backend, ndi_available
+from .cgfeed import detect_html_backend
 from .decklink import DeckLinkWatch, list_devices
 from .effects import (
     bars_path,
@@ -45,6 +45,7 @@ from .noc import (
     revoke_api_token,
 )
 from .pipeline import SPLICE_PORT, preview_path, sections_from_mom, whep_url
+from .vanc_feed import send_sdi_scte
 from .prom import PrometheusError, fetch
 from .services import (
     ServiceError,
@@ -411,6 +412,10 @@ def make_handler(console: Console):
             else:
                 for section in sections:
                     console.splice_sender(section, ("127.0.0.1", port))
+            try:
+                send_sdi_scte(channel_id, payload, frame_pts)
+            except OSError:
+                pass
             console.sideband.add({
                 "channel": channel_id,
                 "kind": "scte35",
@@ -452,8 +457,6 @@ def make_handler(console: Console):
             warnings = []
             if result.get("html") and console.html_backend() == "none":
                 warnings.append("HTML renderer is not installed; those layers stay transparent")
-            if result.get("ndi") and not ndi_available():
-                warnings.append("NDI receiver is not installed; those layers stay transparent")
             if warnings:
                 result["warning"] = " ".join(warnings)
             applied = {"channel": channel_id, "preset": result.get("preset") or "", "frames": result.get("frames")}

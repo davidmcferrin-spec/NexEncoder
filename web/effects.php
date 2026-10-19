@@ -83,7 +83,7 @@ header('X-Content-Type-Options: nosniff');
       </section>
       <section class="panel">
         <h2>CG layers</h2>
-        <p class="muted">Level −4 is furthest behind the video and +4 is the top. 0 is the video input. A negative level shows in the area the squeeze opens. HTML keeps its alpha. NDI needs the NDI receiver on this host. SDI fill/key is DeckLink Duo (3) and (4), one pair shared by both channels.</p>
+        <p class="muted">Level −4 is furthest behind the video and +4 is the top. 0 is the video input. A negative level shows in the area the squeeze opens. HTML keeps its alpha.</p>
         <div id="layer-list"></div>
         <h2>Preset</h2>
         <div class="field-block">

@@ -31,7 +31,8 @@ on `PATH`), a pinned MediaMTX v1.21.1 binary, and Google Chrome when
 `nexencoder-channel@` template, `nexencoder-decklink-configure.service`, and
 `nexencoder-noc.service`. `setup.sh` builds `decklink-configure` and `decklink-status`
 from the SDK headers. Before the channels start, `decklink-configure` sets Duo 2 and
-8K Pro connectors to half-duplex inputs so connectors 1–4 are separate capture pins.
+8K Pro connectors to half-duplex so connectors 1 and 2 are independent inputs and
+connectors 3 and 4 stay free for SDI playback.
 `decklink-status` prints JSON lock and mode for each connector, and the dashboard
 reads that through the live feed. It enables
 and restarts Apache, Prometheus, node_exporter, MediaMTX, the console, the NOC agent,
@@ -90,9 +91,7 @@ lands on the same part of the picture.
 `POST /api/channels/A/effects/normalize` returns that input to full raster and clears the
 CG. Neither call restarts the channel. CEA-608/708 stay on the primary frame as A/53 SEI,
 and SCTE-104 still arrives as VANC datagrams and leaves as SCTE-35. A CG layer is a live HTML page (WPE, or Chromium capturing PNG with the
-background omitted so transparency survives), an NDI source with alpha when
-GStreamer `ndisrc` is installed, or the shared SDI fill/key pair on
-DeckLink Duo (3) and (4). Chromium runs under `nice 10` behind the encodes and gets
+background omitted so transparency survives). Chromium runs under `nice 10` behind the encodes and gets
 30 s to show its first page; it keeps one profile per layer under
 `/var/lib/nexencoder/chrome/<channel>-<slot>`. When a layer stays transparent, run
 `python3 -m nexencoder.cgfeed --probe http://127.0.0.1/cg/bug.html` on the host: it
@@ -105,6 +104,7 @@ or port 9002. Auto, beside each raster menu, reads the locked SDI mode or the co
 SRT caller and saves that raster when it is one of the six this encoder accepts. SDI Auto
 needs the channel stopped, because the probe opens the sub-device. An unmatched picture
 is reported and left unsaved. Restart the channel after Auto so capture uses the new raster. Output B's listener defaults to port 9101 so it does not take an input port.
+An output can also be SDI. Channel A plays DeckLink Duo (3) and channel B plays DeckLink Duo (4). Each channel has one SDI destination. The picture is the program feed, so squeeze, graphics, and bars are already in it. 608/708 are written back from the captions in that stream, and SCTE-104 is written on the frame it arrived. A dead SDI output restarts on its own.
 Layer −5 is a waiting picture (a slate, a 10–30 second loop, or color bars) and stays on
 the output when SDI unlocks or the SRT caller drops. The encode keeps running.
 `POST /api/channels/A/bars` with `{"enabled": true}` puts SMPTE bars and an ident
@@ -157,7 +157,7 @@ existing token or `noc.json`.
 | `pipeline.py` | ffmpeg capture, tsp spliceinject, SRT, and HLS argv |
 | `livefeed.py` | SRT ingest, waiting-loop feeder, and the DeckLink signal flag |
 | `effects.py` | Squeeze quads, CG layers, presets, recall and normalize |
-| `cgfeed.py` | HTML and SDI fill/key feeders for the CG slots |
+| `cgfeed.py` | HTML feeders for the CG slots |
 | `effect_patch.py` | Install the `nexeffect` and `nexcaption` filters into the FFmpeg 9.0.2 build |
 | `caption_feed.py` | Vendor caption datagrams written as the NXCC file the encode reads |
 | `vendors.py` | Docker sidecars for one channel. The container is not on the encode path |
@@ -174,11 +174,12 @@ existing token or `noc.json`.
   With the squeeze and HTML CG layers, use the i9-13900H and 64 GB. One or two
   simple HTML layers fit. Four animated HTML layers on both channels at once
   needs a larger host. The MS-01 has one half-height PCIe 4.0 x16 slot (x8 speed),
-  so it needs a low-profile card. On a Duo 2 Mini the four connectors are two program
-  inputs plus one shared fill/key pair. The card ships in full duplex, which hides
-  connectors 3 and 4. `decklink-configure --apply-inputs` (run by
-  `nexencoder-decklink-configure` before the channels open the card) switches each
-  pin to an independent input.
+  so it needs a low-profile card. Program A is connector 1 and program B is connector 2.
+  The card ships in full duplex, which pairs those connectors so input B is not
+  its own capture device. `decklink-configure --apply-inputs` (run by
+  `nexencoder-decklink-configure` before the channels open the card) switches
+  the card to half-duplex so connectors 1 and 2 are independent inputs.
+  Connectors 3 and 4 are the SDI playback pins for channels A and B.
 - **Capture card (per owner, both have a reference input and support 1080i59.94):**
   DeckLink Duo 2 Mini (PCIe 2.0 x4, enough for two HD inputs) or DeckLink 8K Pro Mini
   (PCIe 3.0 x8, 12G-SDI, room for four channels or 4K later). Full-height cards do not fit the MS-01.
@@ -196,7 +197,7 @@ existing token or `noc.json`.
 - [x] Phase 3: H.264/AAC, tsp SCTE-35 insert, SRT caller/listener, HLS push/pull, channel supervisor. Each input can publish up to four of those deliveries from the one encode.
 - [x] Phase 4: MediaMTX preview (RTSP publish, WHEP on the dashboard) and caption/SCTE sideband. The operator console uses the NexApp theme.
 - [x] Phase 5: `nexencoder-console`, `nexencoder-channel@`, and `mediamtx` units; `setup.sh` installs ffmpeg, GStreamer, Prometheus, and MediaMTX
-- [x] Phase 6: four-corner squeeze, up to two CG layers (HTML or one SDI fill/key), effect builder, preset recall and normalize
+- [x] Phase 6: four-corner squeeze, up to two HTML CG layers, effect builder, preset recall and normalize
 - [x] Phase 7: SDI or SRT listener per input, waiting picture on layer −5, bars and ident on layer +5, fractional presets, 1080p
 - [x] NOC agent: `/api/noc/v1` identity, host metrics, per-output status, and start/stop/restart. See `docs/NOC-AGENT-API.md`.
 - [x] Vendor sidecars: a Docker image bound to channel A or B, host network, caption and SCTE sockets. The encode stays on the host. See `docs/VENDOR.md`.

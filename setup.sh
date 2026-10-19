@@ -254,6 +254,7 @@ ffmpeg_build_ok() {
     && [[ "$decoders" == *" png "* ]] \
     && [[ -e /usr/local/lib/libavdevice.so ]] \
     && grep -a -q 'nexencoder VANC forwarder' /usr/local/lib/libavdevice.so \
+    && grep -a -q 'nexencoder SDI ancillary' /usr/local/lib/libavdevice.so \
     && grep -a -q 'nexencoder effect stack' /usr/local/lib/libavfilter.so \
     && grep -a -q 'nexencoder caption slot' /usr/local/lib/libavfilter.so
 }
@@ -269,7 +270,7 @@ install_ffmpeg() {
     die "DeckLink SDK headers not found. Put Blackmagic_DeckLink_SDK_*.zip in /home/nexstar."
   fi
   if [ "${NEXENCODER_FORCE_FFMPEG_BUILD:-}" != "1" ] && [ -x "$bin" ] && ffmpeg_build_ok "$bin" "$version"; then
-    log "FFmpeg ${version} with DeckLink and the VANC forwarder is already installed (${bin})"
+    log "FFmpeg ${version} with DeckLink, the VANC forwarder, and SDI ancillary is already installed (${bin})"
     return 0
   fi
   local jobs work src
@@ -283,6 +284,9 @@ install_ffmpeg() {
   log "patching DeckLink capture to forward VANC captions and SCTE-104"
   python3 -c 'import sys; from nexencoder.decklink_patch import patch_file; patch_file(sys.argv[1])' \
     "${src}/libavdevice/decklink_dec.cpp"
+  log "patching DeckLink playback to write 608/708 and SCTE-104"
+  python3 -c 'import sys; from nexencoder.sdi_patch import patch_file; patch_file(sys.argv[1])' \
+    "${src}/libavdevice/decklink_enc.cpp"
   log "installing the nexeffect squeeze, CG, and caption filters"
   python3 -c 'import sys; from nexencoder.effect_patch import install_filter; install_filter(sys.argv[1])' \
     "$src"
@@ -314,7 +318,7 @@ install_ffmpeg() {
   $SUDO ldconfig
   rm -rf "$work"
   if ! ffmpeg_build_ok "$bin" "$version"; then
-    die "FFmpeg ${version} at ${bin} is missing DeckLink, the png decoder, the VANC forwarder, nexeffect, or nexcaption"
+    die "FFmpeg ${version} at ${bin} is missing DeckLink, the png decoder, the VANC forwarder, SDI ancillary, nexeffect, or nexcaption"
   fi
   ver="$("$bin" -version 2>/dev/null || true)"
   log "installed ${bin} (${ver%%$'\n'*})"
@@ -441,9 +445,6 @@ if [ "${ID:-}" = "ubuntu" ] && [ "${VERSION_ID:-}" = "24.04" ] && command -v apt
     else
       log "WARNING: no Chrome package for $(uname -m). HTML layers stay transparent until a Chromium binary is on PATH."
     fi
-  fi
-  if ! gst-inspect-1.0 ndisrc >/dev/null 2>&1; then
-    log "WARNING: GStreamer ndisrc is not installed. NDI CG needs the NDI SDK and that plugin. The layer stays transparent until the receiver is present."
   fi
 
   if command -v tsp >/dev/null 2>&1; then

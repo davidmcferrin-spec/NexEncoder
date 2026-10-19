@@ -20,6 +20,9 @@ SPLICE_PORT = {"A": 19101, "B": 19102}
 VANC_PORT = {"A": 19201, "B": 19202}
 # Vendor captions. The channel writes the file the nexcaption filter reads.
 CAPTION_PORT = {"A": 19301, "B": 19302}
+# SCTE-104 for the SDI playback muxer. The channel forwards each message here.
+SDI_SCTE_PORT = {"A": 19401, "B": 19402}
+SDI_DEVICES = {"A": "DeckLink Duo (3)", "B": "DeckLink Duo (4)"}
 # TSDuck 3.45 ships the ip plugin and no udp plugin. The ip input only joins a
 # multicast group, so the program feed is this group on the loopback interface.
 FEED_ADDR = "239.255.1.1"
@@ -415,6 +418,29 @@ def sections_from_mom(payload: bytes, frame_pts: int = 0) -> list[bytes]:
     return sections
 
 
+def sdi_argv(channel_id: str, ffmpeg: str = "ffmpeg", device: str | None = None) -> list[str]:
+    """Play the program feed on the channel's DeckLink output.
+
+    The picture is the encoded program, so squeeze, graphics, and bars are
+    already in it. ``wrapped_avframe`` keeps A/53 side data on the frame for
+    the patched DeckLink muxer, which writes 608/708 and queued SCTE-104.
+    """
+    playback = device or SDI_DEVICES[channel_id]
+    return [
+        ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "warning",
+        "-fflags", "+genpts+discardcorrupt",
+        "-analyzeduration", "1000000", "-probesize", "1000000",
+        "-f", "mpegts", "-i", feed_url(channel_id),
+        "-map", "0:v:0", "-map", "0:a:0?",
+        "-vf", "format=uyvy422",
+        "-c:v", "wrapped_avframe",
+        "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2",
+        "-f", "decklink",
+        "-preroll", "0.5",
+        playback,
+    ]
+
+
 def egress_argv(
     channel_id: str,
     mode: str,
@@ -426,6 +452,8 @@ def egress_argv(
     tsp: str = "tsp",
     srt_statistics: bool = True,
 ) -> list[str]:
+    if mode == "sdi":
+        return sdi_argv(channel_id, ffmpeg)
     if mode.startswith("srt-"):
         return srt_argv(channel_id, mode, host, port, tsp, statistics=srt_statistics, url=url)
     return hls_argv(channel_id, mode, url, publish_dir, ffmpeg)

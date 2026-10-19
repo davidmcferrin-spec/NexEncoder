@@ -33,7 +33,7 @@ playlists are `hls/<channel>/<id>/index.m3u8`. Destination `1` stays at `hls/<ch
 | HLS egress | FFmpeg `-f hls` copy, one process per destination. Push is HTTP PUT. The first pull writes `/var/lib/nexencoder/hls/<id>/index.m3u8`. Further pulls write `/var/lib/nexencoder/hls/<id>/<destination>/index.m3u8`. Segments are 2 seconds. |
 | Preview | A separate ffmpeg decodes the program feed and publishes RTSP to MediaMTX at `rtsp://127.0.0.1:8554/inputA` (and `inputB`). WHEP is on port 8889. Restarting that proxy does not restart the channel. |
 
-GStreamer is installed for HTML CG and NDI layers. It is not on the program encode or
+GStreamer is installed for HTML CG. It is not on the program encode or
 the CDN egress. `pipeline.gstreamer` is `false` on both outputs.
 
 MediaMTX is not monitored. The agent does not call `systemctl` on `mediamtx.service`
@@ -155,7 +155,7 @@ paths may be `a` or `A`. Start, stop, and restart accept `a` and `A` as well.
 
 If two stored presets produce the same slug, recall and the status routes return
 400 `preset slug is not unique`. `warning` is set when the preset uses an HTML
-layer and no renderer is installed, or an NDI layer and `ndisrc` is missing. The
+layer and no renderer is installed. The
 recall still applies; that layer stays transparent. `valid` stays true.
 
 ```json
@@ -495,7 +495,8 @@ report utilization and is not called. The GPU sample is cached for 5 seconds.
 | `hls-playlist-stale` | false | The playlist exists but is older than that. |
 | `hls-playlist-missing` | false | Pull mode and the playlist is not there. |
 | `hls-push-process` | true | Push mode and the encode pipeline is up. FFmpeg exits when the PUT target fails, which restarts the pipeline, so a steady encode is the signal. There is no CDN acknowledgement. |
-| `pipeline-down` | false | Push mode and the encode is not running. |
+| `pipeline-down` | false | Push or SDI mode and the encode is not running. |
+| `sdi-play` | true | SDI playback and the encode pipeline is up. The dot is orange and the detail is `playing`. |
 
 `video.bitrate_measured_bps` is the FFmpeg progress bitrate (multiplex, so audio and
 container are included), not a pure elementary video rate. `bitrate_configured_bps`
@@ -618,8 +619,9 @@ A missing file, or a key of the wrong type, falls back to the default for that k
 Bad allowlist entries are skipped and logged.
 
 Channel config (`encoder.json`) is still the console's file. Output mode is
-`srt-listener`, `srt-caller`, `hls-push`, or `hls-pull`. Bitrate is the video rate
-in Mbit/s.
+`srt-listener`, `srt-caller`, `hls-push`, `hls-pull`, or `sdi`. An `sdi` destination
+plays DeckLink Duo (3) on channel A and DeckLink Duo (4) on channel B. A second SDI
+destination on the same channel is dropped. Bitrate is the video rate in Mbit/s.
 
 ## Install and update
 

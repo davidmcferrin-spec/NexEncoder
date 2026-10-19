@@ -14,6 +14,7 @@ import hmac
 import ipaddress
 import json
 import logging
+import os
 import re
 import secrets
 import socket
@@ -28,7 +29,7 @@ from urllib.parse import parse_qsl, parse_qs, unquote, urlencode, urlsplit, urlu
 
 from . import __version__
 from .audit import try_record
-from .cgfeed import detect_html_backend, ndi_available as ndi_receiver_available
+from .cgfeed import detect_html_backend
 from .channels import CHANNELS, INPUT_SRT_PORTS, hls_publish_dir, load_config, srt_stats_path
 from .effects import _load_live, load_presets, normalize_channel, recall_effect
 from .hoststats import HostCollector, parse_uptime
@@ -661,6 +662,10 @@ def connection(
         if encoding:
             return True, "hls-push-process"
         return False, "pipeline-down"
+    if mode == "sdi":
+        if encoding:
+            return True, "sdi-play"
+        return False, "pipeline-down"
     return None, "unknown"
 
 
@@ -718,6 +723,10 @@ def transmission(mode: str, evidence: str, srt_body: dict | None, dns: str) -> t
     if mode == "hls-push":
         if evidence == "hls-push-process":
             return "orange", "sending"
+        return "red", "down"
+    if mode == "sdi":
+        if evidence == "sdi-play":
+            return "orange", "playing"
         return "red", "down"
     return "red", "down"
 
@@ -835,6 +844,7 @@ def output_health(
                 "host": looked["host"] or host,
                 "port": int(spec["port"]) if mode.startswith("srt-") else None,
                 "url": redact_url(spec.get("url") or "") if mode in {"hls-push", "srt-caller"} else "",
+                "device": str(spec.get("device") or "") if mode == "sdi" else "",
                 "state": state,
                 "detail": detail,
                 "dns": looked["dns"],
@@ -858,6 +868,8 @@ def destination(channel_id: str, spec: dict, hls_root: Path) -> str:
     if mode == "hls-pull":
         slot = str(spec.get("id") or "1")
         return str(hls_publish_dir(hls_root, channel_id, slot) / "index.m3u8")
+    if mode == "sdi":
+        return str(spec.get("device") or "")
     return ""
 
 
@@ -866,6 +878,8 @@ def transport_mode(config_mode: str) -> tuple[str, str]:
         return "srt", config_mode.split("-", 1)[1]
     if config_mode.startswith("hls-"):
         return "hls", config_mode.split("-", 1)[1]
+    if config_mode == "sdi":
+        return "sdi", "playback"
     return "unknown", config_mode
 
 
@@ -962,7 +976,6 @@ class Agent:
         wall=None,
         hostname: str | None = None,
         html_backend=None,
-        ndi_ready=None,
         token_path: Path | None = None,
     ) -> None:
         self.token = token
@@ -979,7 +992,6 @@ class Agent:
         self.allow = list(noc.get("allow") or [])
         self.trust_proxy = bool(noc.get("trust_proxy"))
         self.html_backend = html_backend or detect_html_backend
-        self.ndi_ready = ndi_ready or ndi_receiver_available
 
     def token_matches(self, presented: str) -> bool:
         if not presented:
@@ -1337,14 +1349,8 @@ class Agent:
             isinstance(layer, dict) and isinstance(layer.get("source"), dict) and layer["source"].get("type") == "html"
             for layer in layers
         )
-        ndi = any(
-            isinstance(layer, dict) and isinstance(layer.get("source"), dict) and layer["source"].get("type") == "ndi"
-            for layer in layers
-        )
         if html and self.html_backend() == "none":
             notes.append("HTML renderer is not installed; those layers stay transparent")
-        if ndi and not self.ndi_ready():
-            notes.append("NDI receiver is not installed; those layers stay transparent")
         return " ".join(notes)
 
     def _effect_view(self, name: str, preset: dict | None, slug: str = "") -> dict:

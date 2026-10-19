@@ -55,12 +55,14 @@ from .pipeline import (
     PROGRESS_FD,
     STILL_FD,
     bind_pipe_fds,
+    SDI_SCTE_PORT,
     VANC_PORT,
     caption_state_path,
     capture_argv,
     clock_argv,
     egress_argv,
     preview_argv,
+    sdi_argv,
     splice_argv,
 )
 from .signal import signal_mode
@@ -622,6 +624,14 @@ def run_channel(
         plans = []
         for spec in destinations:
             slot = spec["id"]
+            if spec["mode"] == "sdi":
+                plans.append({
+                    "spec": spec,
+                    "argv": sdi_argv(channel_id, device=spec.get("device") or None),
+                    "stats": False,
+                    "publish": None,
+                })
+                continue
             publish = hls_publish_dir(publish_root, channel_id, slot)
             publish.mkdir(parents=True, exist_ok=True)
             stats = stats_on and spec["mode"].startswith("srt-")
@@ -697,6 +707,9 @@ def run_channel(
             daemon=True,
         ).start()
     previous_port = os.environ.get("NEXENCODER_VANC_PORT")
+    previous_sdi = os.environ.get("NEXENCODER_SDI_SCTE_PORT")
+    if any(item["mode"] == "sdi" for item in destinations):
+        os.environ["NEXENCODER_SDI_SCTE_PORT"] = str(SDI_SCTE_PORT[channel_id])
     if vanc_listen:
         os.environ["NEXENCODER_VANC_PORT"] = str(VANC_PORT[channel_id])
         start_vanc_thread(channel_id, vanc_stop, lambda: _running(splice_proc[0]))
@@ -847,6 +860,11 @@ def run_channel(
             os.environ.pop("NEXENCODER_VANC_PORT", None)
         else:
             os.environ["NEXENCODER_VANC_PORT"] = previous_port
+    if any(item["mode"] == "sdi" for item in destinations):
+        if previous_sdi is None:
+            os.environ.pop("NEXENCODER_SDI_SCTE_PORT", None)
+        else:
+            os.environ["NEXENCODER_SDI_SCTE_PORT"] = previous_sdi
     return 0
 
 

@@ -50,6 +50,22 @@ def test_scte104_is_inserted_once_until_it_ages_out():
     assert len(sent) == 2
 
 
+def test_scte104_is_forwarded_to_sdi_once():
+    sent = []
+    sdi = []
+    forwarder = VancForwarder(
+        "B",
+        lambda section, port: sent.append((section, port)),
+        lambda note: None,
+        sdi_send=lambda payload, pts: sdi.append((payload, pts)),
+    )
+    packet = pack_vanc_datagram(KIND_SCTE, 180000, _mom())
+    forwarder.handle(packet, 1.0, True)
+    forwarder.handle(packet, 2.0, True)
+    assert sdi == [(_mom(), 180000)]
+    assert len(sent) == 1
+
+
 def test_caption_notes_follow_text_changes():
     notes = []
     forwarder = VancForwarder("B", lambda section, port: None, notes.append)

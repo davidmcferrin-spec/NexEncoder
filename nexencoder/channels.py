@@ -12,11 +12,12 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .metrics import InputStatus, OutputStatus, Snapshot
+from .pipeline import SDI_DEVICES
 from .signal import signal_mode
 
 CHANNELS = ("A", "B")
 FORMATS = frozenset({"1080i59.94", "1080i50", "1080p59.94", "1080p60", "1080p50", "720p59.94", "720p50"})
-MODES = frozenset({"srt-caller", "srt-listener", "hls-push", "hls-pull"})
+MODES = frozenset({"srt-caller", "srt-listener", "hls-push", "hls-pull", "sdi"})
 SOURCES = frozenset({"sdi", "srt"})
 WAITING = frozenset({"slate", "loop", "bars"})
 # Input listeners are fixed. An output listener must not bind these ports.
@@ -139,7 +140,23 @@ def _clean_destination(item: dict, fallback_port: int) -> dict:
             dest["port"] = parsed["port"]
     elif dest["mode"] in {"hls-push", "hls-pull"} and isinstance(url, str) and len(url) <= 1000 and (url == "" or url.startswith(("http://", "https://"))):
         dest["url"] = url
+    if dest["mode"] == "sdi":
+        dest["host"] = ""
+        dest["url"] = ""
     return dest
+
+
+def _one_sdi(items: list[dict]) -> list[dict]:
+    """A channel has one playback connector, so a second SDI destination is dropped."""
+    kept = []
+    seen = False
+    for item in items:
+        if item["mode"] == "sdi":
+            if seen:
+                continue
+            seen = True
+        kept.append(item)
+    return kept
 
 
 def _assign_slots(items: list[dict]) -> None:
@@ -235,6 +252,10 @@ def normalize_config(raw: dict) -> dict:
         fallback = DEFAULT_LISTENER_PORTS[channel_id]
         cleaned = [_clean_destination(item, fallback) for item in items]
         _assign_slots(cleaned)
+        cleaned = _one_sdi(cleaned)
+        for dest in cleaned:
+            if dest["mode"] == "sdi":
+                dest["device"] = SDI_DEVICES[channel_id]
         base["outputs"][channel_id] = cleaned
     _unique_listeners(base)
     return base

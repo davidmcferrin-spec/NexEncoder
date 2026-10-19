@@ -18,13 +18,15 @@
     A: { sdi: "DeckLink Duo (1)", srt: "SRT listener · port 9001" },
     B: { sdi: "DeckLink Duo (2)", srt: "SRT listener · port 9002" }
   };
-  var MODES = ["srt-caller", "srt-listener", "hls-push", "hls-pull"];
+  var MODES = ["srt-caller", "srt-listener", "hls-push", "hls-pull", "sdi"];
   var MODE_LABELS = {
     "srt-caller": "SRT caller",
     "srt-listener": "SRT listener",
     "hls-push": "HLS push",
-    "hls-pull": "HLS pull"
+    "hls-pull": "HLS pull",
+    "sdi": "SDI"
   };
+  var SDI_DEVICE = { A: "DeckLink Duo (3)", B: "DeckLink Duo (4)" };
   var SLOTS = ["1", "2", "3", "4"];
   var MAX_OUTPUTS = 4;
   var RESERVED_PORTS = { 9001: true, 9002: true };
@@ -77,8 +79,9 @@
       } else if (dest.url) {
         dest.url = "";
       }
-    } else if (dest.mode === "srt-listener") {
+    } else if (dest.mode === "srt-listener" || dest.mode === "sdi") {
       dest.url = "";
+      if (dest.mode === "sdi") dest.host = "";
     }
     return dest;
   }
@@ -145,7 +148,14 @@
       if (!items.length) return;
       var cleaned = items.map(function (item) { return cleanDestination(item, DEFAULT_PORTS[id]); });
       assignSlots(cleaned);
-      config.outputs[id] = cleaned;
+      var seenSdi = false;
+      config.outputs[id] = cleaned.filter(function (output) {
+        if (output.mode !== "sdi") return true;
+        if (seenSdi) return false;
+        seenSdi = true;
+        output.device = SDI_DEVICE[id];
+        return true;
+      });
     });
     var used = { 9001: true, 9002: true };
     CHANNELS.forEach(function (id) {
@@ -235,6 +245,7 @@
     if (output.mode === "hls-push") {
       return output.url ? "HLS push · " + output.url : "HLS push · URL not set";
     }
+    if (output.mode === "sdi") return "SDI · " + (output.device || "DeckLink");
     return output.url ? "HLS pull · " + output.url : "HLS pull · local playlist";
   }
 
@@ -428,6 +439,13 @@
       url.setAttribute("data-key", "url");
       card.appendChild(labeledField(output.mode === "hls-push" ? "Push URL" : "Playlist URL", url));
     }
+    if (output.mode === "sdi") {
+      card.appendChild(el(
+        "p",
+        "muted",
+        "Playback connector " + (SDI_DEVICE[channelId] || output.device || "DeckLink") + ". 608/708 and SCTE-104 are written into the VANC."
+      ));
+    }
     return card;
   }
 
@@ -484,6 +502,20 @@
     if (!output) return;
     if (key === "mode") {
       if (MODES.indexOf(input.value) === -1) return;
+      if (input.value === "sdi") {
+        var taken = (config.outputs[id] || []).some(function (item) {
+          return item.mode === "sdi" && item.id !== output.id;
+        });
+        if (taken) {
+          input.value = output.mode;
+          fieldError(id, "This input already has an SDI output.");
+          setSaved(id, false);
+          return;
+        }
+        output.host = "";
+        output.url = "";
+        output.device = SDI_DEVICE[id];
+      }
       output.mode = input.value;
       if (output.mode === "srt-listener") {
         output.port = claimListenerPort(output.port, id + ":" + output.id);
@@ -798,6 +830,7 @@
     loss: "Connected, with loss or retransmits",
     peer: "Peer is up, statistics are stale",
     sending: "Encode is sending. The origin receipt is not confirmed",
+    playing: "SDI playback is running",
     down: "Not connected",
     dns: "Hostname does not resolve"
   };

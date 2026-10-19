@@ -1,8 +1,7 @@
 """CG feeders for the two layer slots.
 
 HTML is a live page: WPE when that plugin is installed, otherwise Chromium
-capturing PNG with the background omitted so CSS alpha survives. NDI is a
-GStreamer ndisrc into the same BGRA slot. Fill/key is one shared DeckLink pair.
+capturing PNG with the background omitted so CSS alpha survives.
 A missing renderer leaves the slot file unwritten, which the filter treats
 as a transparent layer. The primary picture, captions, and SCTE path stay up.
 """
@@ -24,7 +23,7 @@ import zlib
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .effects import SDI_FILL, SDI_KEY, cg_dir, layers_path
+from .effects import layers_path
 
 log = logging.getLogger("nexencoder.cg")
 
@@ -32,8 +31,6 @@ HEADER = 32
 MAGIC = b"NXCG"
 FLAG_PREMULTIPLIED = 1
 _PNG_SIG = b"\x89PNG\r\n\x1a\n"
-_NDI_READY: bool | None = None
-_NDI_MISSING_LOGGED = False
 
 
 def pack_header(seq: int, width: int, height: int, nbytes: int, flags: int = 0) -> bytes:
@@ -211,17 +208,6 @@ def wpe_argv(url: str, width: int, height: int) -> list[str]:
     ]
 
 
-def key_argv(format_code: str) -> list[str]:
-    """Fill is DeckLink input 3 and key is input 4. The pair is not configurable."""
-    return [
-        "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "warning",
-        "-f", "decklink", "-raw_format", "uyvy422", "-format_code", format_code, "-i", SDI_FILL,
-        "-f", "decklink", "-raw_format", "uyvy422", "-format_code", format_code, "-i", SDI_KEY,
-        "-filter_complex", "[1:v]format=gray[k];[0:v][k]alphamerge,format=bgra,fps=30",
-        "-f", "rawvideo", "-pix_fmt", "bgra", "pipe:1",
-    ]
-
-
 def with_lower_priority(argv: list[str], *, demote: bool) -> list[str]:
     """Run a renderer below the capture so its startup cannot stall DeckLink."""
     if demote:
@@ -364,54 +350,9 @@ def choose_page_target(infos, url: str) -> tuple[str, str]:
     return "", ""
 
 
-def ndi_argv(name: str, width: int, height: int) -> list[str]:
-    """Receive one NDI source. BGRA from NDI is premultiplied; the slot flag says so."""
-    if '"' in name or "\\" in name:
-        raise ValueError("NDI source name cannot contain quotes")
-    return [
-        "gst-launch-1.0", "-q",
-        "ndisrc", f'ndi-name="{name}"',
-        "!", "videoconvert",
-        "!", "videoscale",
-        "!", "videorate",
-        "!", f"video/x-raw,format=BGRA,width={width},height={height},framerate=30/1",
-        "!", "fdsink", "fd=1", "sync=false",
-    ]
-
-
-def ndi_available(inspect=None) -> bool:
-    """True when GStreamer's ndisrc element is installed. The NDI SDK is not downloaded."""
-    if inspect is not None:
-        return bool(inspect())
-    global _NDI_READY
-    if _NDI_READY is None:
-        _NDI_READY = _ndi_probe()
-    return _NDI_READY
-
-
-def _ndi_probe() -> bool:
-    if shutil.which("gst-inspect-1.0") is None:
-        return False
-    try:
-        done = subprocess.run(
-            ["gst-inspect-1.0", "ndisrc"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            timeout=5,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return done.returncode == 0
-
-
 def feeder_key(layer: dict) -> str:
     source = layer["source"]
-    if source["type"] == "html":
-        return f"html:{layer['slot']}:{source['url']}"
-    if source["type"] == "ndi":
-        return f"ndi:{layer['slot']}:{source['name']}"
-    return "sdi"
+    return f"html:{layer['slot']}:{source['url']}"
 
 
 def plan_changes(running: dict[str, dict], desired: list[dict]) -> tuple[list[str], list[dict]]:
@@ -461,34 +402,6 @@ def load_layer_spec(path: Path) -> dict | None:
     if not isinstance(raw, dict) or not isinstance(raw.get("layers"), list):
         return None
     return raw
-
-
-def update_key_owner(state_dir: Path, channel_id: str, needed: bool) -> str:
-    """Record whether this channel needs the shared fill/key. The lowest id runs it."""
-    directory = cg_dir(state_dir)
-    directory.mkdir(parents=True, exist_ok=True)
-    lock_path = directory / "keyfill.lock"
-    refs_path = directory / "keyfill.refs"
-    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
-    try:
-        if os.name == "posix":
-            import fcntl
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        try:
-            refs = set(json.loads(refs_path.read_text(encoding="utf-8")))
-        except (OSError, json.JSONDecodeError, TypeError):
-            refs = set()
-        refs = {item for item in refs if item in ("A", "B")}
-        if needed:
-            refs.add(channel_id)
-        else:
-            refs.discard(channel_id)
-        refs_path.write_text(json.dumps(sorted(refs)) + "\n", encoding="utf-8")
-        if not refs:
-            return ""
-        return sorted(refs)[0]
-    finally:
-        os.close(fd)
 
 
 _CHROME_QUIET = (
@@ -1076,19 +989,9 @@ def _start_layer(layer: dict, spec: dict, backend: str, spawn) -> _Running:
     width = int(spec["width"])
     height = int(spec["height"])
     source = layer["source"]
-    premultiplied = source["type"] == "ndi" or (source["type"] == "html" and backend == "wpe")
+    premultiplied = backend == "wpe"
     writer = SlotWriter(Path(layer["path"]), width, height, premultiplied=premultiplied)
-    if source["type"] == "sdi-key":
-        argv = key_argv(spec["format_code"])
-        thread = threading.Thread(
-            target=run_pipe_feeder, args=(argv, writer, holder, spawn), name="nexencoder-keyfill", daemon=True,
-        )
-    elif source["type"] == "ndi":
-        argv = ndi_argv(source["name"], width, height)
-        thread = threading.Thread(
-            target=run_pipe_feeder, args=(argv, writer, holder, spawn), name="nexencoder-ndi", daemon=True,
-        )
-    elif backend == "wpe":
+    if backend == "wpe":
         argv = wpe_argv(source["url"], width, height)
         thread = threading.Thread(
             target=run_pipe_feeder, args=(argv, writer, holder, spawn), name="nexencoder-html", daemon=True,
@@ -1129,26 +1032,12 @@ def reconcile_once(
     """Start and stop feeders so they match the layer manifest. Returns the new table."""
     spec = load_layer_spec(layers_path(state_dir, channel_id))
     desired = []
-    needs_key = False
     chosen = backend if backend is not None else detect_html_backend()
     if spec:
         for layer in spec["layers"]:
             source = layer.get("source") or {}
-            if source.get("type") == "sdi-key":
-                needs_key = True
+            if source.get("type") == "html" and chosen != "none":
                 desired.append(layer)
-            elif source.get("type") == "html" and chosen != "none":
-                desired.append(layer)
-            elif source.get("type") == "ndi" and ndi_available():
-                desired.append(layer)
-            elif source.get("type") == "ndi":
-                global _NDI_MISSING_LOGGED
-                if not _NDI_MISSING_LOGGED:
-                    log.error("NDI receiver is not installed; %s stays transparent", source.get("name"))
-                    _NDI_MISSING_LOGGED = True
-    owner = update_key_owner(state_dir, channel_id, needs_key)
-    if owner != channel_id:
-        desired = [layer for layer in desired if (layer.get("source") or {}).get("type") != "sdi-key"]
     for key in finished_keys(running):
         log.warning("CG feeder %s stopped; starting it again", key)
         running.pop(key).halt()
@@ -1176,7 +1065,6 @@ def supervise(
         except Exception:
             log.warning("CG supervisor for %s failed", channel_id, exc_info=True)
         stop.wait(0.5)
-    update_key_owner(state_dir, channel_id, False)
     for feeder in running.values():
         feeder.halt()
 

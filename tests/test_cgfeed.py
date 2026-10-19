@@ -33,11 +33,8 @@ from nexencoder.cgfeed import (
     with_lower_priority,
     detect_html_backend,
     feeder_key,
-    key_argv,
-    ndi_argv,
     plan_changes,
     read_slot,
-    update_key_owner,
     wpe_argv,
 )
 from nexencoder.effects import layers_path
@@ -55,33 +52,27 @@ def test_slot_seqlock_roundtrip(tmp_path):
 
 def test_feeder_plan_restarts_only_the_source_that_changed():
     html = {"slot": 0, "source": {"type": "html", "url": "https://cg.example/a"}}
-    key = {"slot": 1, "source": {"type": "sdi-key"}}
-    stop, start = plan_changes({}, [html, key])
+    other = {"slot": 1, "source": {"type": "html", "url": "https://cg.example/c"}}
+    stop, start = plan_changes({}, [html, other])
     assert stop == []
-    assert start == [html, key]
-    running = {"html:0:https://cg.example/a": html, "sdi": key}
+    assert start == [html, other]
+    running = {feeder_key(html): html, feeder_key(other): other}
     moved = dict(html)
-    stop, start = plan_changes(running, [moved, key])
+    stop, start = plan_changes(running, [moved, other])
     assert stop == []
     assert start == []
     changed = {"slot": 0, "source": {"type": "html", "url": "https://cg.example/b"}}
     stop, start = plan_changes(running, [changed])
-    assert "sdi" in stop
+    assert feeder_key(other) in stop
     assert start == [changed]
 
 
-def test_key_and_html_argv_do_not_open_the_program_input():
+def test_html_argv_does_not_open_the_program_input():
     html = wpe_argv("https://cg.example/bug", 1920, 1080)
     assert html[0] == "gst-launch-1.0"
     assert "wpesrc" in html
     assert "BGRA" in "".join(html)
     assert "DeckLink" not in " ".join(html)
-    key = key_argv("Hi59")
-    assert key[key.index("-i") + 1] == "DeckLink Duo (3)"
-    assert key[key.index("-i", key.index("-i") + 1) + 1] == "DeckLink Duo (4)"
-    assert key.count("-i") == 2
-    assert "alphamerge" in " ".join(key)
-    assert "yuv422p10" not in key
 
 
 def _png(width: int, height: int, rgba: bytes) -> bytes:
@@ -359,16 +350,6 @@ def test_html_renderer_runs_below_the_capture():
     assert with_lower_priority(argv, demote=False)[0] == "google-chrome"
 
 
-def test_ndi_argv_names_the_source_and_requests_bgra():
-    argv = ndi_argv("GRAPHICS (NDI)", 1920, 1080)
-    assert "ndisrc" in argv
-    assert 'ndi-name="GRAPHICS (NDI)"' in argv
-    assert "BGRA" in "".join(argv)
-    ndi = {"slot": 0, "source": {"type": "ndi", "name": "GRAPHICS (NDI)"}}
-    from nexencoder.cgfeed import feeder_key
-    assert feeder_key(ndi) == "ndi:0:GRAPHICS (NDI)"
-
-
 def test_html_backend_prefers_wpe_then_chromium():
     assert detect_html_backend(which=lambda _name: None, inspect=lambda: False) == "none"
     assert detect_html_backend(which=lambda name: "/usr/bin/gst" if name == "gst-launch-1.0" else None, inspect=lambda: True) == "wpe"
@@ -376,13 +357,6 @@ def test_html_backend_prefers_wpe_then_chromium():
         which=lambda name: "/usr/bin/chromium" if name == "chromium" else None,
         inspect=lambda: False,
     ) == "chromium"
-
-
-def test_one_channel_owns_the_shared_key(tmp_path):
-    assert update_key_owner(tmp_path, "B", True) == "B"
-    assert update_key_owner(tmp_path, "A", True) == "A"
-    assert update_key_owner(tmp_path, "A", False) == "B"
-    assert update_key_owner(tmp_path, "B", False) == ""
 
 
 def test_filter_patch_registers_nexeffect_and_copies_side_data(tmp_path):

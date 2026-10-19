@@ -22,8 +22,6 @@ MAX_LAYERS = 2
 MAX_FRAMES = 600
 STILL_SECONDS = 8
 LEVELS = frozenset({-4, -3, -2, -1, 1, 2, 3, 4})
-SDI_FILL = "DeckLink Duo (3)"
-SDI_KEY = "DeckLink Duo (4)"
 HTML_ORIGIN = "http://127.0.0.1"
 WAITING_MODES = frozenset({"slate", "loop", "bars"})
 
@@ -313,28 +311,16 @@ def absolute_cg_url(url: str, origin: str = HTML_ORIGIN) -> str:
     raise ValueError("CG URL must be http, https, or a path on this console")
 
 
-def _ndi_name(value: object) -> str:
-    if not isinstance(value, str):
-        raise ValueError("NDI source needs a name")
-    name = " ".join(value.split())
-    if not name or len(name) > 200:
-        raise ValueError("NDI source name must be 1 to 200 characters")
-    if '"' in name or "\\" in name:
-        raise ValueError("NDI source name cannot contain quotes")
-    return name
-
-
-def _source(raw: object) -> dict:
+def _source(raw: object) -> dict | None:
+    """Return an HTML source. A stored NDI or fill/key layer is omitted."""
     if not isinstance(raw, dict):
         raise ValueError("layer source must be an object")
     kind = raw.get("type")
+    if kind in ("ndi", "sdi-key"):
+        return None
     if kind == "html":
         return {"type": "html", "url": absolute_cg_url(str(raw.get("url") or ""))}
-    if kind == "sdi-key":
-        return {"type": "sdi-key"}
-    if kind == "ndi":
-        return {"type": "ndi", "name": _ndi_name(raw.get("name"))}
-    raise ValueError("layer source must be html, ndi, or sdi-key")
+    raise ValueError("layer source must be html")
 
 
 def normalize_effect(raw: object, channel_format: str | None = None) -> dict:
@@ -360,26 +346,23 @@ def normalize_effect(raw: object, channel_format: str | None = None) -> dict:
     layers_in = raw.get("layers") or []
     if not isinstance(layers_in, list):
         raise ValueError("layers must be a list")
-    if len(layers_in) > MAX_LAYERS:
-        raise ValueError(f"a channel can hold {MAX_LAYERS} CG layers")
     layers = []
     seen: set[int] = set()
-    keys = 0
     for item in layers_in:
         if not isinstance(item, dict):
             raise ValueError("a layer must be an object")
+        source = _source(item.get("source"))
+        if source is None:
+            continue
         level = item.get("level")
         if isinstance(level, bool) or not isinstance(level, int) or level not in LEVELS:
             raise ValueError("layer level must be -4 to -1 or +1 to +4")
         if level in seen:
             raise ValueError("two layers share a level")
         seen.add(level)
-        source = _source(item.get("source"))
-        if source["type"] == "sdi-key":
-            keys += 1
         layers.append({"level": level, "source": source})
-    if keys > 1:
-        raise ValueError("only one SDI fill/key pair can be on a channel")
+    if len(layers) > MAX_LAYERS:
+        raise ValueError(f"a channel can hold {MAX_LAYERS} CG layers")
     return {
         "format": mode.format_name if mode is not None else "",
         "corners": corners,
@@ -464,10 +447,6 @@ def cg_dir(state_dir: Path) -> Path:
 
 def slot_path(state_dir: Path, channel_id: str, slot: int) -> Path:
     return cg_dir(state_dir) / f"{channel_id}-{slot}.nxcg"
-
-
-def keyfill_path(state_dir: Path) -> Path:
-    return cg_dir(state_dir) / "keyfill.nxcg"
 
 
 def load_presets(state_dir: Path) -> list[dict]:
@@ -584,10 +563,7 @@ def _slot_plan(state_dir: Path, channel_id: str, effect: dict) -> tuple[list[tup
     manifest = []
     for index, layer in enumerate(effect["layers"]):
         source = layer["source"]
-        if source["type"] == "sdi-key":
-            path = keyfill_path(state_dir)
-        else:
-            path = slot_path(state_dir, channel_id, index)
+        path = slot_path(state_dir, channel_id, index)
         slots[index] = (layer["level"], path.as_posix())
         manifest.append({
             "slot": index,
@@ -673,7 +649,6 @@ def recall_effect(state_dir: Path, channel_id: str, raw: dict, config: dict) -> 
     written["channel"] = channel_id
     written["preset"] = preset_name
     written["html"] = any(layer["source"]["type"] == "html" for layer in effect["layers"])
-    written["ndi"] = any(layer["source"]["type"] == "ndi" for layer in effect["layers"])
     return written
 
 
