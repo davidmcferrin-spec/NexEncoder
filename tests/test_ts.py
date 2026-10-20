@@ -152,6 +152,41 @@ def test_preview_gate_accepts_an_sps_without_the_random_access_bit():
     assert gate.feed(pat + pmt + key) == pat + pmt + key
 
 
+def test_preview_gate_holds_the_frame_until_the_sps_packet():
+    pat = _packet(0, b"\x00" + _PAT)
+    pmt = _packet(0x100, b"\x00" + _PMT)
+    start = _packet(0x101, b"\x00\x00\x01\x09\xf0" + b"\x11" * 8)
+    sps = _packet(0x101, b"\x00\x00\x00\x01\x67\x42" + b"\x22" * 8, pusi=False, cc=1)
+    rest = _packet(0x101, b"\x33" * 16, pusi=False, cc=2)
+    gate = PreviewGate()
+    assert gate.feed(pat + pmt + start) == b""
+    assert gate.opened is False
+    assert gate.feed(sps + rest) == pat + pmt + start + sps + rest
+    assert gate.opened is True
+
+
+def test_preview_gate_holds_a_start_code_split_across_packets():
+    pat = _packet(0, b"\x00" + _PAT)
+    pmt = _packet(0x100, b"\x00" + _PMT)
+    start = _packet(0x101, b"\x11" * 181 + b"\x00\x00\x01")
+    sps = _packet(0x101, b"\x67\x42" + b"\x22" * 8, pusi=False, cc=1)
+    gate = PreviewGate()
+    assert gate.feed(pat + pmt + start) == b""
+    assert gate.feed(sps) == pat + pmt + start + sps
+
+
+def test_preview_gate_drops_a_frame_that_never_carries_sps():
+    pat = _packet(0, b"\x00" + _PAT)
+    pmt = _packet(0x100, b"\x00" + _PMT)
+    predicted = _packet(0x101, b"\x00\x00\x01\x41" + b"\x11" * 8)
+    cont = _packet(0x101, b"\x22" * 8, pusi=False, cc=1)
+    key = _packet(0x101, b"\x00\x00\x00\x01\x67\x42" + b"\x33" * 8, cc=2)
+    gate = PreviewGate()
+    assert gate.feed(pat + pmt + predicted + cont) == b""
+    assert gate.opened is False
+    assert gate.feed(key) == pat + pmt + key
+
+
 def test_preview_gate_waits_for_a_whole_packet():
     pat = _packet(0, b"\x00" + _PAT)
     pmt = _packet(0x100, b"\x00" + _PMT)

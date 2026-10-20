@@ -225,14 +225,35 @@ def _has_sps(pkt: bytes) -> bool:
         start = found + 3
 
 
+def _au_is_keyframe(packets: list[bytes]) -> bool:
+    """True when this access unit is marked, or its sequence header has arrived.
+
+    The start code may be split across the last bytes of one packet and the
+    first bytes of the next, so the scan keeps a three-byte overlap.
+    """
+    if is_random_access(packets[0]):
+        return True
+    tail = b""
+    for pkt in packets:
+        if _has_sps(tail + pkt):
+            return True
+        tail = pkt[-3:]
+    return False
+
+
 class PreviewGate:
     """Hold a program feed until the first video keyframe, then pass it through.
 
     A decoder that starts on a predicted slice logs a missing parameter set
     for every slice until the next IDR, and that burst is what drops the
     RTSP session. The first bytes out are the cached PAT, the cached PMT,
-    and the keyframe packet, so the picture starts on a random access point.
+    and the keyframe, so the picture starts on a random access point.
+    The sequence header often rides in the packet after the PES start.
+    Those packets stay held until the header arrives. A frame that ends
+    without one is dropped when the next frame starts.
     """
+
+    _HOLD_LIMIT = 8 * 1024 * 1024
 
     def __init__(self) -> None:
         self.opened = False
@@ -241,6 +262,7 @@ class PreviewGate:
         self._pmt_pid: int | None = None
         self._pmt: bytes | None = None
         self._video_pid: int | None = None
+        self._hold: list[bytes] = []
 
     def feed(self, data: bytes) -> bytes:
         if not data:
@@ -270,18 +292,31 @@ class PreviewGate:
         elif self._pmt_pid is not None and pid == self._pmt_pid:
             video = pmt_video_pid(pkt)
             if video is not None:
+                if video != self._video_pid:
+                    self._hold = []
                 self._pmt = pkt
                 self._video_pid = video
         if self.opened:
             return pkt
         # A keyframe seen before the tables is not reused. Its continuation
         # packets were dropped, so the next random access point is the start.
-        if self._pat is None or self._pmt is None or not self._is_start(pkt, pid):
+        if self._pat is None or self._pmt is None or self._video_pid is None or pid != self._video_pid:
+            return b""
+        return self._hold_video(pkt)
+
+    def _hold_video(self, pkt: bytes) -> bytes:
+        if pkt[1] & 0x40:
+            self._hold = [pkt]
+        elif self._hold:
+            self._hold.append(pkt)
+        else:
+            return b""
+        if sum(len(item) for item in self._hold) > self._HOLD_LIMIT:
+            self._hold = []
+            return b""
+        if not _au_is_keyframe(self._hold):
             return b""
         self.opened = True
-        return self._pat + self._pmt + pkt
-
-    def _is_start(self, pkt: bytes, pid: int) -> bool:
-        if not (pkt[1] & 0x40) or self._video_pid is None or pid != self._video_pid:
-            return False
-        return is_random_access(pkt) or _has_sps(pkt)
+        out = self._pat + self._pmt + b"".join(self._hold)
+        self._hold = []
+        return out
