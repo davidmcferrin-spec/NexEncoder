@@ -111,6 +111,7 @@ header('X-Content-Type-Options: nosniff');
             <select id="format-A" data-channel="A" data-key="format">
               <option value="1080i59.94">1080i 59.94</option>
               <option value="1080i50">1080i 50</option>
+              <option value="1080p29.97">1080p 29.97</option>
               <option value="1080p59.94">1080p 59.94</option>
               <option value="1080p60">1080p 60</option>
               <option value="1080p50">1080p 50</option>
@@ -218,6 +219,7 @@ header('X-Content-Type-Options: nosniff');
             <select id="format-B" data-channel="B" data-key="format">
               <option value="1080i59.94">1080i 59.94</option>
               <option value="1080i50">1080i 50</option>
+              <option value="1080p29.97">1080p 29.97</option>
               <option value="1080p59.94">1080p 59.94</option>
               <option value="1080p60">1080p 60</option>
               <option value="1080p50">1080p 50</option>

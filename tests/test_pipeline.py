@@ -37,7 +37,7 @@ from nexencoder.pipeline import (
     splice_argv,
 )
 from nexencoder.scte35 import SpliceNull, parse_section
-from nexencoder.signal import h264_level, signal_mode
+from nexencoder.signal import h264_level, lavfi_rate, signal_mode
 
 
 def test_capture_keeps_vanc_and_leaves_the_monitor_off_this_process():
@@ -82,6 +82,10 @@ def test_progressive_capture_skips_interlace_flags():
     assert signal_mode("1080p60").format_code == "Hp60"
     assert h264_level(signal_mode("1080p60")) == "4.2"
     assert signal_mode("1080p50").format_code == "Hp50"
+    assert signal_mode("1080p29.97").format_code == "Hp29"
+    assert signal_mode("1080p29.97").interlaced is False
+    assert h264_level(signal_mode("1080p29.97")) == "4.1"
+    assert lavfi_rate(signal_mode("1080p29.97")) == "30000/1001"
 
 
 def test_srt_input_keeps_an_encode_clock_without_a_still():

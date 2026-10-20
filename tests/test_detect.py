@@ -9,6 +9,8 @@ from nexencoder.effects import signal_path, write_flag
 def test_geometry_maps_the_supported_rasters():
     assert raster_from_geometry(1920, 1080, 29.97, True) == "1080i59.94"
     assert raster_from_geometry(1920, 1080, 25, True) == "1080i50"
+    assert raster_from_geometry(1920, 1080, 29.97, False) == "1080p29.97"
+    assert raster_from_geometry(1920, 1080, 30, False) is None
     assert raster_from_geometry(1920, 1080, 59.94, False) == "1080p59.94"
     assert raster_from_geometry(1920, 1080, 60, False) == "1080p60"
     assert raster_from_geometry(1920, 1080, 50, False) == "1080p50"
@@ -21,6 +23,8 @@ def test_geometry_maps_the_supported_rasters():
 def test_decklink_banner_and_status_json():
     found = parse_probe("Found Decklink mode 1920 x 1080 with rate 29.97(i)\n", "DeckLink Duo (1)")
     assert found["ok"] is True and found["format"] == "1080i59.94"
+    progressive_slow = parse_probe("Found Decklink mode 1920 x 1080 with rate 29.97\n", "DeckLink Duo (1)")
+    assert progressive_slow["ok"] is True and progressive_slow["format"] == "1080p29.97"
     progressive = parse_probe(
         "Stream #0:0: Video: rawvideo, uyvy422, 1920x1080, 50 fps, 50 tbr\n",
         "DeckLink Duo (1)",

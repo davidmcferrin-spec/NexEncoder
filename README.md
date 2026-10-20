@@ -102,7 +102,7 @@ A channel holds at most two layers, and those two cannot share a level.
 
 Input A is DeckLink Duo (1) or an SRT listener on port 9001. Input B is DeckLink Duo (2)
 or port 9002. Auto, beside each raster menu, reads the locked SDI mode or the connected
-SRT caller and saves that raster when it is one of the six this encoder accepts. SDI Auto
+SRT caller and saves that raster when this encoder accepts it. The list includes 1080p29.97. SDI Auto
 needs the channel stopped, because the probe opens the sub-device. An unmatched picture
 is reported and left unsaved. Restart the channel after Auto so capture uses the new raster. Output B's listener defaults to port 9101 so it does not take an input port.
 An output can also be SDI. Channel A plays DeckLink Duo (3) and channel B plays DeckLink Duo (4). Each channel has one SDI destination. The picture is the program feed, so squeeze, graphics, and bars are already in it. 608/708 are written back from the captions in that stream, and SCTE-104 is written on the frame it arrived. A dead SDI output restarts on its own.

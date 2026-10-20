@@ -24,6 +24,7 @@ log = logging.getLogger("nexencoder.detect")
 _LABELS = {
     "1080i59.94": "1080i 59.94",
     "1080i50": "1080i 50",
+    "1080p29.97": "1080p 29.97",
     "1080p59.94": "1080p 59.94",
     "1080p60": "1080p 60",
     "1080p50": "1080p 50",
@@ -58,6 +59,10 @@ def raster_from_geometry(width: int, height: int, fps: float, interlaced: bool) 
             return "1080p59.94"
         if _near(fps, 50):
             return "1080p50"
+        if _integer_rate(fps, 30):
+            return None
+        if _near(fps, 29.97):
+            return "1080p29.97"
         return None
     if width == 1280 and height == 720 and not interlaced:
         if _near(fps, 59.94) or _near(fps, 60):
@@ -228,7 +233,7 @@ def _geometry(text: str) -> dict | None:
             "width": width,
             "height": height,
             "fps": fps,
-            "interlaced": bool(match.group(4)) or _scan(match.group(0), width, height, fps),
+            "interlaced": bool(match.group(4)),
         }
     found = None
     for line in text.splitlines():
